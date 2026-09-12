@@ -8,46 +8,46 @@
 
 ## 一覧
 
-| # | タイトル | 担当 | 依存 | 手順書 | ラベル |
-|---|---|---|---|---|---|
-| **1** | **Terraformでdev環境をゼロから再現** | 🤖 | H-01,02,03 / #4 | `02` | `area:infra` |
-| 2 | 🧑 Cloudflareアカウント作成（**Free・課金なし**）・APIトークン発行 | 🧑 | #34 | `00` H-01,H-02 | `human-only` |
-| 3 | 🧑 tfstate用R2バケット手動作成＋S3アクセスキー発行 | 🧑 | #2 | `00` H-03 | `human-only` |
-| 4 | monorepo骨格の初期化（pnpm workspace / turbo / tsconfig references） | 🤖 | H-06 | `01` §1-3 | `area:platform` |
-| 5 | 🧑 リポジトリ可視性の判断（PUBLIC → private?） | 🧑 | — | `00` H-06 | `human-only` |
-| 6 | 🧑🤖 main保護・Environments（staging/production）・Milestone・Label設定 | 🧑🤖 | #5 | `01` §5 | `area:ci` |
-| 7 | 🧑 GitHub Secrets / Variables 登録 | 🧑 | #2,#3 | `00` H-08 | `human-only` |
-| 8 | Issue/PRテンプレート・Conventional Commits・CLAUDE.md | 🤖 | #4 | `01` §6-7 | `area:ci` |
-| 9 | 越境import禁止のlintルール（gateway→D1/R2/DO 等） | 🤖 | #4 | `01` §3.2 | `area:platform` |
-| 10 | Terraformモジュール `musubi-env` の設計と実装 | 🤖 | #1 | `02` §5 | `area:infra` |
-| 11 | staging / production 環境の Terraform apply | 🧑🤖 | #10 | `02` §9 | `area:infra` |
-| 12 | `infra:sync`（terraform output → wrangler.jsonc 同期）＋ドリフト検知 | 🤖 | #10 | `03` §3 | `area:infra` |
-| 13 | data-api Worker 骨格（D1/R2/DO バインド・healthz） | 🤖 | #10,#12 | `03` §2,§5 | `area:platform` |
-| 14 | app-do（Durable Object・SQLite）骨格＋ `new_sqlite_classes` migration | 🤖 | #4 | `03` §4 | `area:platform` |
-| 15 | gateway Worker 骨格（Service Binding → data-api） | 🤖 | #13 | `03` §2 | `area:platform` |
-| 16 | host（TanStack Start ＋ @cloudflare/vite-plugin）骨格＋ SB → gateway | 🤖 | #15 | `03` §2 | `area:platform` |
-| 17 | 貫通スモークスクリプト `pnpm smoke`（host→gateway→data-api→D1/R2/DO） | 🤖 | #16 | `03` §5 | `area:platform` |
-| 18 | ローカル開発手順の確定（wrangler dev マルチワーカー・3つの穴）→ `docs/runbook/local-dev.md` | 🤖 | #16 | `03` §6 | `area:platform` |
-| 19 | D1マイグレーション機構＋前方互換規律 → `docs/runbook/d1-migration.md` | 🤖 | #13 | `03` §7 | `area:platform` |
-| 20 | CI: `ci.yml`（lint/typecheck/unit/PRタイトル/sync-check） | 🤖 | #4,#7 | `04` §2 | `area:ci` |
-| 21 | CI: `infra-plan.yml`（terraform plan をPRコメント） | 🤖 | #10,#7 | `04` §3 | `area:ci` |
-| 22 | CD: `deploy-staging.yml`（main→migration→deploy→smoke） | 🤖 | #17,#19,#7 | `04` §4 | `area:ci` |
-| 23 | CD: `deploy-production.yml`（tag v*→承認→deploy→smoke） | 🧑🤖 | #22,#6 | `04` §5 | `area:ci` |
-| 24 | ロールバック手順の確立と**実演** → `docs/runbook/rollback.md` | 🧑🤖 | #23 | `04` §6 | `area:ci` |
-| 25 | `pins/commandagent.json` プレースホルダと形式定義（M1準備） | 🤖 | #4 | `01` §1 | `area:platform` |
-| 26 | M0受入試験の実施と清算表の記入 | 🧑🤖 | #24 | `05` | — |
-| 27 | 🧑 商標クリアランス（9類・42類）の調査発注 | 🧑 | — | `00` H-05 | `human-only` |
-| 28 | 🧑 ドメイン取得＋Cloudflareゾーン委任 | 🧑 | #27 | `00` H-04 | `human-only` |
-| 29 | 🧑 ~~WfP有効化~~ → **M5へ延期**。M0は「不要の確定」と `wfp_enabled=false` 固定のみ | 🧑 | #2 | `00` H-09 / `06` §3 | `human-only` |
-| 30 | 🧑 LINE Developers dev チャネル先行取得（M2準備） | 🧑 | — | `00` H-10 | `human-only` |
-| 31 | 🧑 Google Cloud OAuth クライアント先行発行（M2準備） | 🧑 | — | `00` H-11 | `human-only` |
-| 32 | 🧑 CommandAgent 接点・ピン対象の確定（M1準備） | 🧑 | — | `00` H-12 | `human-only` |
-| 33 | 🧑 $0の宣言＋**プラン昇格トリガー（P-1〜P-6 / W-1・W-2）の承認** | 🧑 | — | `00` H-13 / `06` §5 | `human-only` |
-| **34** | ✅ ~~Cloudflareアカウントを分けるか決める~~ **2026-09-12 決定（案A）。起票不要** | 🧑 | — | `00` H-14 / `06` §4.3 | `human-only` |
-| 35 | 無償枠の実測をスモークに埋め込む（CPU時間・チェーン合計） | 🤖 | #17 | `03` §5 / `06` §7 | `area:platform` |
-| 36 | 試験F：無償枠の実測と `06` §8 プラン清算の記入 | 🧑🤖 | #35,#23 | `05` §3.5 | — |
-| 37 | M2計測基盤に **promotion_decision 記録件数**を入れる（WfP昇格の先行指標）— M2へ送るIssue | 🤖 | — | `06` §5 | `area:platform` |
-| 38 | 🧑 **CIトークンをテンプレートから最小構成へ絞り直す** — **Milestone `M3`**（実データが乗る前に締める） | 🧑 | #7 | `00` H-02 | `human-only` |
+| # | タイトル | 担当 | 依存 | 手順書 | ラベル | **GitHub** |
+|---|---|---|---|---|---|---|
+| **1** | **Terraformでdev環境をゼロから再現** | 🤖 | H-01,02,03 / #4 | `02` | `area:infra` | [#2](https://github.com/Kewton/Musubi/issues/2) |
+| 2 | 🧑 Cloudflareアカウント作成（**Free・課金なし**）・APIトークン発行 | 🧑 | #34 | `00` H-01,H-02 | `human-only` | ✅ 完了済（H-01/H-02）・起票せず |
+| 3 | 🧑 tfstate用R2バケット手動作成＋S3アクセスキー発行 | 🧑 | #2 | `00` H-03 | `human-only` | ✅ 完了済（H-03）・起票せず |
+| 4 | monorepo骨格の初期化（pnpm workspace / turbo / tsconfig references） | 🤖 | H-06 | `01` §1-3 | `area:platform` | ✅ 完了済（M0-1）・起票せず |
+| 5 | 🧑 リポジトリ可視性の判断（PUBLIC → private?） | 🧑 | — | `00` H-06 | `human-only` | ✅ 完了済（H-06）・起票せず |
+| 6 | 🧑🤖 main保護・Environments（staging/production）・Milestone・Label設定 | 🧑🤖 | #5 | `01` §5 | `area:ci` | ✅ 完了済（H-07）・起票せず |
+| 7 | 🧑 GitHub Secrets / Variables 登録 | 🧑 | #2,#3 | `00` H-08 | `human-only` | ✅ 完了済（H-08）・起票せず |
+| 8 | Issue/PRテンプレート・Conventional Commits・CLAUDE.md | 🤖 | #4 | `01` §6-7 | `area:ci` | ✅ 完了済（M0-1）・起票せず |
+| 9 | 越境import禁止のlintルール（gateway→D1/R2/DO 等） | 🤖 | #4 | `01` §3.2 | `area:platform` | ✅ 完了済（M0-1）・起票せず |
+| 10 | Terraformモジュール `musubi-env` の設計と実装 | 🤖 | #1 | `02` §5 | `area:infra` | [#3](https://github.com/Kewton/Musubi/issues/3) |
+| 11 | staging / production 環境の Terraform apply | 🧑🤖 | #10 | `02` §9 | `area:infra` | [#4](https://github.com/Kewton/Musubi/issues/4) |
+| 12 | `infra:sync`（terraform output → wrangler.jsonc 同期）＋ドリフト検知 | 🤖 | #10 | `03` §3 | `area:infra` | [#5](https://github.com/Kewton/Musubi/issues/5) |
+| 13 | data-api Worker 骨格（D1/R2/DO バインド・healthz） | 🤖 | #10,#12 | `03` §2,§5 | `area:platform` | [#6](https://github.com/Kewton/Musubi/issues/6) |
+| 14 | app-do（Durable Object・SQLite）骨格＋ `new_sqlite_classes` migration | 🤖 | #4 | `03` §4 | `area:platform` | [#7](https://github.com/Kewton/Musubi/issues/7) |
+| 15 | gateway Worker 骨格（Service Binding → data-api） | 🤖 | #13 | `03` §2 | `area:platform` | [#8](https://github.com/Kewton/Musubi/issues/8) |
+| 16 | host（TanStack Start ＋ @cloudflare/vite-plugin）骨格＋ SB → gateway | 🤖 | #15 | `03` §2 | `area:platform` | [#9](https://github.com/Kewton/Musubi/issues/9) |
+| 17 | 貫通スモークスクリプト `pnpm smoke`（host→gateway→data-api→D1/R2/DO） | 🤖 | #16 | `03` §5 | `area:platform` | [#10](https://github.com/Kewton/Musubi/issues/10) |
+| 18 | ローカル開発手順の確定（wrangler dev マルチワーカー・3つの穴）→ `docs/runbook/local-dev.md` | 🤖 | #16 | `03` §6 | `area:platform` | [#11](https://github.com/Kewton/Musubi/issues/11) |
+| 19 | D1マイグレーション機構＋前方互換規律 → `docs/runbook/d1-migration.md` | 🤖 | #13 | `03` §7 | `area:platform` | [#12](https://github.com/Kewton/Musubi/issues/12) |
+| 20 | CI: `ci.yml`（lint/typecheck/unit/PRタイトル/sync-check） | 🤖 | #4,#7 | `04` §2 | `area:ci` | [#13](https://github.com/Kewton/Musubi/issues/13) |
+| 21 | CI: `infra-plan.yml`（terraform plan をPRコメント） | 🤖 | #10,#7 | `04` §3 | `area:ci` | [#14](https://github.com/Kewton/Musubi/issues/14) |
+| 22 | CD: `deploy-staging.yml`（main→migration→deploy→smoke） | 🤖 | #17,#19,#7 | `04` §4 | `area:ci` | [#15](https://github.com/Kewton/Musubi/issues/15) |
+| 23 | CD: `deploy-production.yml`（tag v*→承認→deploy→smoke） | 🧑🤖 | #22,#6 | `04` §5 | `area:ci` | [#16](https://github.com/Kewton/Musubi/issues/16) |
+| 24 | ロールバック手順の確立と**実演** → `docs/runbook/rollback.md` | 🧑🤖 | #23 | `04` §6 | `area:ci` | [#17](https://github.com/Kewton/Musubi/issues/17) |
+| 25 | `pins/commandagent.json` プレースホルダと形式定義（M1準備） | 🤖 | #4 | `01` §1 | `area:platform` | ✅ 完了済（H-12）・起票せず |
+| 26 | M0受入試験の実施と清算表の記入 | 🧑🤖 | #24 | `05` | — | [#18](https://github.com/Kewton/Musubi/issues/18) |
+| 27 | 🧑 商標クリアランス（9類・42類）の調査発注 | 🧑 | — | `00` H-05 | `human-only` | [#19](https://github.com/Kewton/Musubi/issues/19) |
+| 28 | 🧑 ドメイン取得＋Cloudflareゾーン委任 | 🧑 | #27 | `00` H-04 | `human-only` | [#20](https://github.com/Kewton/Musubi/issues/20) |
+| 29 | 🧑 ~~WfP有効化~~ → **M5へ延期**。M0は「不要の確定」と `wfp_enabled=false` 固定のみ | 🧑 | #2 | `00` H-09 / `06` §3 | `human-only` | [#21](https://github.com/Kewton/Musubi/issues/21) |
+| 30 | 🧑 LINE Developers dev チャネル先行取得（M2準備） | 🧑 | — | `00` H-10 | `human-only` | [#22](https://github.com/Kewton/Musubi/issues/22) |
+| 31 | 🧑 Google Cloud OAuth クライアント先行発行（M2準備） | 🧑 | — | `00` H-11 | `human-only` | [#23](https://github.com/Kewton/Musubi/issues/23) |
+| 32 | 🧑 CommandAgent 接点・ピン対象の確定（M1準備） | 🧑 | — | `00` H-12 | `human-only` | [#24](https://github.com/Kewton/Musubi/issues/24) |
+| 33 | 🧑 $0の宣言＋**プラン昇格トリガー（P-1〜P-6 / W-1・W-2）の承認** | 🧑 | — | `00` H-13 / `06` §5 | `human-only` | ✅ 完了済（H-13）・起票せず |
+| **34** | ✅ ~~Cloudflareアカウントを分けるか決める~~ **2026-09-12 決定（案A）。起票不要** | 🧑 | — | `00` H-14 / `06` §4.3 | `human-only` | ✅ 完了済（H-14）・起票せず |
+| 35 | 無償枠の実測をスモークに埋め込む（CPU時間・チェーン合計） | 🤖 | #17 | `03` §5 / `06` §7 | `area:platform` | [#25](https://github.com/Kewton/Musubi/issues/25) |
+| 36 | 試験F：無償枠の実測と `06` §8 プラン清算の記入 | 🧑🤖 | #35,#23 | `05` §3.5 | — | [#26](https://github.com/Kewton/Musubi/issues/26) |
+| 37 | M2計測基盤に **promotion_decision 記録件数**を入れる（WfP昇格の先行指標）— M2へ送るIssue | 🤖 | — | `06` §5 | `area:platform` | [#27](https://github.com/Kewton/Musubi/issues/27) |
+| 38 | 🧑 **CIトークンをテンプレートから最小構成へ絞り直す** — **Milestone `M3`**（実データが乗る前に締める） | 🧑 | #7 | `00` H-02 | `human-only` | [#28](https://github.com/Kewton/Musubi/issues/28) |
 
 **内訳**：🧑 人間のみ = 13件（#2,3,5,7,27,28,29,30,31,32,33,34,38）／🧑🤖 = 6件（#6,11,23,24,26,36）／🤖 = 19件
 
@@ -135,3 +135,25 @@ BODY
 
 > **注意**：`--milestone` は事前に Milestone が存在している必要がある（`01` §5 で作成）。
 > 🧑 の Issue には必ず `human-only` ラベルを付ける。**AIがうっかり着手して「できません」で止まる時間を無くすため。**
+
+---
+
+## 起票の記録（2026-09-12）
+
+**案A で起票した：開いている27件のみを GitHub へ起票し、完了済み11件は起票していない。**
+完了分の記録は [`checklist.md`](./checklist.md) と [`00e-execution-status.md`](./00e-execution-status.md) にある。
+起票直後にクローズする空の記帳を作らないための判断。
+
+| | 件数 | doc番号 |
+|---|---|---|
+| 起票した | **27** | #1, #10〜#24, #26〜#32, #35〜#38 |
+| 完了済み・起票せず | **11** | #2, #3, #4, #5, #6, #7, #8, #9, #25, #33, #34 |
+
+### ⚠️ 番号は doc とずれている
+
+**GitHub は Issue と PR で採番を共有する。** M0-1 のドキュメント PR が **#1** を取ったため、
+企画書22章の「#1 は Terraformでdev環境をゼロから再現」は実現していない。
+**Terraform の Issue は [#2](https://github.com/Kewton/Musubi/issues/2)** である。
+本ファイルの番号は doc 内部の参照用として残し、上表の **GitHub 列が実体**である。
+
+GitHub 側の Issue 本文では、依存の相互参照を実番号へ書き換え済み。

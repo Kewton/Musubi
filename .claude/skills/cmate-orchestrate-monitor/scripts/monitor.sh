@@ -1,0 +1,726 @@
+#!/usr/bin/env bash
+# monitor.sh — supervise one or more orchestrate workers with the tested
+# decision core (classify-state.sh / verify-completion.sh).
+#
+# This is the operator entrypoint. The per-poll classification and the
+# completion decision live in separate, unit-tested scripts; this file only
+# owns the loop, the cross-poll state, and the interventions. It is checked by
+# `bash -n` in the test suite and written for bash 3.2 (macOS /bin/bash):
+#   - no associative arrays: per-worker state is held in integer-indexed
+#     parallel arrays and in temp files under $STATE_DIR
+#   - loop variables are never named `path` (that special-var name clobbers PATH
+#     under zsh/bash and breaks curl/tmux lookups; feedback_zsh_path_loop_var)
+#
+# Interventions, in order of how much damage a false positive does:
+#   PROMPT      -> Enter, but ONLY when the poll shows a binary approval whose
+#               default option is affirmative (Issue #59). Enter is typed into
+#               the pane, so it overrides the server's own autoYes policy, and on
+#               a multiple_choice prompt it confirms the DEFAULT option rather
+#               than answering "yes" (CommandMate #1681). Everything else — a
+#               policy suppression (#1547/#1684), a frame with no promptData, a
+#               picker with no default — is HELD: no keys, one report, counted
+#               separately from approvals. See monitor-lib.sh § "prompt approval
+#               policy" for the fields and the measurements behind the rule.
+#   RATE_LIMIT  -> "a" immediately, never sleep through a limit
+#   IDLE + terminal API error at the idle threshold -> resend --resend-message,
+#               capped by --max-resends. This is the only recovery from the CLI
+#               exhausting its own retries (Issue #1522): a live backoff is
+#               classified GENERATING and must NOT be touched, because input sent
+#               mid-backoff is queued and then delivered after the retry succeeds.
+#
+# Every one of them goes through send_to_pane(), which resolves the session from
+# the poll that was just classified, verifies it exists, and reports a failed
+# delivery instead of swallowing it. Every log line and every counter therefore
+# describes what was DELIVERED rather than what was attempted (Issue #1602 — see
+# monitor-lib.sh § "tmux session targeting" for what the old
+# `2>/dev/null || true` hid).
+#
+# Usage:
+#   monitor.sh [--interval 20] [--idle-threshold 8] [--session-prefix <prefix>] \
+#              [--resend-message continue] [--max-resends 2] [--max-polls 0] \
+#              [--heartbeat 10] [--verbose] [--no-auto-approve] [--hooks <file>] \
+#              <worktree-id>[@<instance-id>] [<worktree-id>[@<instance-id>] ...]
+#
+#   <worktree-id>[@<instance-id>]
+#                  the worker to watch, optionally a named agent instance
+#                  (`w1@codex-2`, `w1@claude`). The instance selects BOTH the pane
+#                  that is polled (`capture --agent <tool> --instance <id>`) and
+#                  the pane an intervention is typed into, so classification and
+#                  intervention can never drift onto different sessions. The same
+#                  worktree may be listed more than once with different instances;
+#                  per-worker state and log lines are keyed by `<id>@<instance>`.
+#
+#   --session-prefix <p>
+#                  LEGACY escape hatch. Session names are derived from the capture
+#                  payload's cliToolId by default (`mcbd-<cliToolId>-<worktree-id>`),
+#                  which is what makes a heterogeneous fleet work without any flag.
+#                  Passing this replaces the derived `mcbd-<cliToolId>` head with
+#                  <p>; the instance suffix is still appended. Only needed for a
+#                  session this tool did not create.
+#
+#   --max-polls N  stop after N poll rounds and exit 0 even if workers are still
+#                  working; 0 (default) keeps polling until every worker is
+#                  COMPLETE, i.e. the operator behaviour is unchanged. A bounded
+#                  run ends on its own instead of having to be killed from the
+#                  outside, which is what lets the loop be tested deterministically
+#                  (Issue #1527) and doubles as a one-shot `--max-polls 1` probe.
+#                  It only adds a stop condition — no state or intervention rule
+#                  looks at it.
+#
+#   --verbose      emit one fixed-format line per poll per worker (see POLL_LINE
+#                  below). Opt-in on purpose: the default output stays byte-identical
+#                  so an operator reading the stream still sees only interventions
+#                  and terminal verdicts (Issue #1533).
+#
+#   --heartbeat N  print `monitor: alive (poll=<n>, complete=<d>/<total>)` every N
+#                  poll rounds; 0 disables it. Default 10, i.e. one line every
+#                  ~3 minutes at the documented 20s interval. It answers a
+#                  question the stream could not answer before (CommandMate
+#                  #1728): a monitor that has died and a monitor watching healthy
+#                  workers are both silent, and a 25-minute silence was read as
+#                  the second while it was the first. Cheap enough to leave on —
+#                  the interventions and verdicts around it are unchanged.
+#
+#   --no-auto-approve
+#                  never type Enter at a prompt; hold and report every one of
+#                  them. The switch supervision needs when the delegation carries
+#                  an execution contract: the answer then belongs to the server's
+#                  autoYes policy, and a keystroke into the pane is not subject to
+#                  it (Issue #59). Everything else — classification, rate-limit
+#                  resume, resend, completion — is unchanged.
+#
+#   --hooks <file> source <file> after the built-in count_commits /
+#                  count_uncommitted / read_task_status stubs, so an operator can
+#                  supply the real data sources (Issue #1533, #1589). Repeatable,
+#                  sourced left to right; giving it at all replaces MONITOR_HOOKS.
+#                  Without it the counters return 0 and the task status is empty,
+#                  which is what keeps the loop runnable standalone — and also what
+#                  makes COMPLETE unreachable, since verify-completion.sh treats
+#                  commits=0 && uncommitted=0 as the signature of an unstarted task.
+#                  See hooks-git.sh (work counters) and hooks-task.sh (contract
+#                  status) for ready-to-use implementations.
+#
+# Env:
+#   CM             — commandmate launcher (default: "npx commandmate@latest"; pinned
+#                    so the npx cache cannot resume a stale binary).
+#   MONITOR_HOOKS  — default for --hooks (the flag wins when both are given).
+set -u
+
+INTERVAL=20
+IDLE_THRESHOLD=8          # 150s+ of idle at 20s polls; xhigh workers think long
+SESSION_PREFIX=""         # empty = derive from the poll's cliToolId (the default)
+RESEND_MESSAGE="continue"  # sent after the CLI exhausts its own retries
+MAX_RESENDS=2
+MAX_POLLS=0               # 0 = poll until every worker is COMPLETE (operator default)
+HEARTBEAT=10              # poll rounds between `alive` lines; 0 = off
+VERBOSE=0                 # 0 = default stream (interventions + verdicts only)
+AUTO_APPROVE=1            # 0 = hold every prompt (contract-backed supervision)
+CM=${CM:-"npx commandmate@latest"}
+
+# bash 3.2: plain indexed array, appended with += so an empty array is never
+# expanded under `set -u`.
+HOOKS_FILES=()
+if [ -n "${MONITOR_HOOKS:-}" ]; then
+  HOOKS_FILES+=("$MONITOR_HOOKS")
+fi
+hooks_from_flag=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --interval) shift; INTERVAL=${1:-20};;
+    --idle-threshold) shift; IDLE_THRESHOLD=${1:-8};;
+    --session-prefix) shift; SESSION_PREFIX=${1:-};;
+    --resend-message) shift; RESEND_MESSAGE=${1:-continue};;
+    --max-resends) shift; MAX_RESENDS=${1:-2};;
+    --max-polls) shift; MAX_POLLS=${1:-0};;
+    --heartbeat) shift; HEARTBEAT=${1:-10};;
+    --verbose) VERBOSE=1;;
+    --no-auto-approve) AUTO_APPROVE=0;;
+    --hooks)
+      shift
+      # The first flag drops the MONITOR_HOOKS default (the flag wins); later
+      # ones add to it, so work counters and task status can come from two files.
+      if [ "$hooks_from_flag" = "0" ]; then
+        HOOKS_FILES=()
+        hooks_from_flag=1
+      fi
+      HOOKS_FILES+=("${1:-}")
+      ;;
+    --) shift; break;;
+    -*) echo "monitor.sh: unknown flag $1" >&2; exit 2;;
+    *) break;;
+  esac
+  shift
+done
+
+if [ $# -eq 0 ]; then
+  echo "monitor.sh: at least one worktree-id is required" >&2
+  exit 2
+fi
+
+SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+CLASSIFY="$SCRIPT_DIR/classify-state.sh"
+VERIFY="$SCRIPT_DIR/verify-completion.sh"
+. "$SCRIPT_DIR/monitor-lib.sh"
+
+STATE_DIR=$(mktemp -d -t cm-monitor.XXXXXX)
+cleanup() { rm -rf "$STATE_DIR"; }
+trap cleanup EXIT INT TERM
+
+# Integer-indexed parallel arrays (bash 3.2 has no associative arrays).
+#   IDS       worktree id  — what capture and the completion hooks are given
+#   INSTANCES agent instance id, "" for the tool's primary instance
+#   CAP_ARGS  the extra `capture` flags for this worker ("" for the primary)
+#   LABELS    the state/log key: "<id>" or "<id>@<instance>", so the same worktree
+#             can be watched on two panes without the two sharing a streak
+IDS=()
+INSTANCES=()
+CAP_ARGS=()
+LABELS=()
+
+# Both patterns mirror the server-side validators these ids end up in
+# (WORKTREE_ID_PATTERN / INSTANCE_ID_PATTERN, src/cli/utils/api-client.ts). They
+# are enforced here because the ids are interpolated into a tmux target: the
+# product validates a session name before running tmux (validateSessionName,
+# src/lib/cli-tools/validation.ts) and this loop must not be the weaker path.
+for spec in "$@"; do
+  case "$spec" in
+    *@*)
+      spec_wid=${spec%%@*}
+      spec_instance=${spec#*@}
+      if [ -z "$spec_instance" ]; then
+        echo "monitor.sh: '$spec' has no instance id after '@'" >&2
+        exit 2
+      fi
+      ;;
+    *)
+      spec_wid=$spec
+      spec_instance=""
+      ;;
+  esac
+
+  if ! printf '%s' "$spec_wid" | grep -qE '^[a-zA-Z0-9][a-zA-Z0-9_-]*$'; then
+    echo "monitor.sh: invalid worktree id '$spec_wid' (expected [a-zA-Z0-9][a-zA-Z0-9_-]*)" >&2
+    exit 2
+  fi
+  if [ -n "$spec_instance" ] && ! printf '%s' "$spec_instance" | grep -qE '^[a-zA-Z0-9_-]+$'; then
+    echo "monitor.sh: invalid instance id '$spec_instance' (expected [a-zA-Z0-9_-]+)" >&2
+    exit 2
+  fi
+
+  spec_args=""
+  spec_label=$spec_wid
+  if [ -n "$spec_instance" ]; then
+    spec_label="$spec_wid@$spec_instance"
+    spec_args="--instance $spec_instance"
+    # The server resolves the CLI tool from the worktree row when `--agent` is
+    # omitted (src/app/api/worktrees/[id]/current-output/route.ts), NOT from the
+    # instance id — so polling a codex instance of a claude-default worktree
+    # without --agent looks at mcbd-claude-<wt>-codex-2, a pane that does not
+    # exist. Recovering the agent from the instance id keeps the poll on the
+    # instance's own session, and keeps the derived intervention target (which
+    # reads cliToolId out of that very poll) on it too.
+    spec_agent=$(ml_agent_from_instance "$spec_instance") || spec_agent=""
+    if [ -n "$spec_agent" ]; then
+      spec_args="--agent $spec_agent $spec_args"
+    fi
+  fi
+
+  IDS+=("$spec_wid")
+  INSTANCES+=("$spec_instance")
+  CAP_ARGS+=("$spec_args")
+  LABELS+=("$spec_label")
+done
+
+n_ids=${#IDS[@]}
+
+i=0
+while [ "$i" -lt "$n_ids" ]; do
+  lbl=${LABELS[$i]}
+  echo "0" > "$STATE_DIR/$lbl.streak"
+  echo "0" > "$STATE_DIR/$lbl.started"
+  echo "0" > "$STATE_DIR/$lbl.approvals"
+  echo "0" > "$STATE_DIR/$lbl.held"
+  : > "$STATE_DIR/$lbl.heldsig"
+  echo "0" > "$STATE_DIR/$lbl.resends"
+  i=$((i + 1))
+done
+
+# read_state <label> <suffix> -> echoes stored value (0 if missing)
+read_state() {
+  cat "$STATE_DIR/$1.$2" 2>/dev/null || echo 0
+}
+
+# send_to_pane <label> <session> <what> <key> [<key> ...]
+#
+# The ONLY place this loop types into a worker, and the reason every caller can
+# log a result instead of an intention (Issue #1602). It returns 0 only when tmux
+# accepted the keys, so a caller may count an approval or spend a resend only on a
+# real delivery.
+#
+# Three distinct failures, each reported rather than swallowed, because each needs
+# a different fix from the operator: no session name could be derived, the session
+# does not exist, tmux itself refused. The previous `2>/dev/null || true` made all
+# three indistinguishable from success — which is how a default prefix that matched
+# nothing survived: the loop kept printing "sending 'a'" at a session that had
+# never existed.
+#
+# Failures go to stderr: stdout is the operator's intervention/verdict stream and a
+# failed intervention is not an intervention. The documented run captures both
+# (`2>&1 | tee monitor.log`).
+send_to_pane() {
+  sp__label=$1
+  sp__session=$2
+  sp__what=$3
+  shift 3
+
+  if [ -z "$sp__session" ]; then
+    echo "monitor[$sp__label]: $sp__what NOT delivered — no tmux session could be derived (capture payload carries no cliToolId; pass --session-prefix)" >&2
+    return 1
+  fi
+
+  sp__target=$(ml_tmux_target "$sp__session")
+  if ! tmux has-session -t "$sp__target" 2>/dev/null; then
+    echo "monitor[$sp__label]: $sp__what NOT delivered — no tmux session '$sp__session' (check 'tmux ls'; watch <worktree-id>@<instance-id> or pass --session-prefix)" >&2
+    return 1
+  fi
+  if ! tmux send-keys -t "$sp__target" "$@"; then
+    echo "monitor[$sp__label]: $sp__what NOT delivered — tmux send-keys to '$sp__session' failed" >&2
+    return 1
+  fi
+  return 0
+}
+
+# prompt_hold_reason <verdict> <poll-file>: why Enter was withheld, in the terms
+# the operator has to act on. Each one needs a different move — re-run the
+# delegation without the deny pattern, answer the picker by hand, look at a pane
+# the product could not parse — so they are never collapsed into one message.
+prompt_hold_reason() {
+  case "$1" in
+    hold:policy)
+      printf "the contract's autoYes policy withheld this answer server-side (autoYes.lastSuppression: %s); typing Enter would override it" \
+        "$(ml_autoyes_suppression_reason "$2")"
+      ;;
+    hold:disabled)
+      printf 'auto-approve is off (--no-auto-approve)'
+      ;;
+    hold:no-prompt-data)
+      printf 'the poll carries no promptData, so what Enter would select is unknown'
+      ;;
+    hold:no-default)
+      printf 'no option is marked default, so Enter confirms whatever the cursor sits on, not an approval'
+      ;;
+    hold:choice)
+      printf "the default option is '%s', which is a choice rather than an approval" \
+        "$(ml_prompt_default_label "$2")"
+      ;;
+    hold:type)
+      printf "prompt type '%s' has never been measured against this rule" "$(ml_prompt_type "$2")"
+      ;;
+    *)
+      printf 'unrecognised hold verdict %s' "$1"
+      ;;
+  esac
+}
+
+# count_uncommitted <worktree-id>: best-effort change count. Left to the operator
+# to wire to the worker's checkout; returns 0 here so the loop stays runnable.
+count_uncommitted() {
+  echo 0
+}
+count_commits() {
+  echo 0
+}
+
+# read_task_status <worktree-id>: the status the server recorded for the
+# worktree's newest execution contract, or empty when there is no answer. Stubbed
+# to empty so a contract-less run behaves exactly as before — verify-completion.sh
+# then falls back to the capture heuristics, with no version-gate notice, because
+# nothing was promised. See hooks-task.sh (Issue #1589).
+read_task_status() {
+  echo ""
+}
+
+# Completion hooks. The stubs above are the reason a stock run never reports
+# COMPLETE: verify-completion.sh reads commits=0 && uncommitted=0 as "the task was
+# never sent" (the STARTED-guard signature), so the COMPLETE branch is unreachable
+# until the counters are wired to the worker's checkout. Sourcing happens *after*
+# the stubs so a hooks file that defines any of the names wins, and a hooks file
+# that defines only one leaves the others stubbed.
+if [ ${#HOOKS_FILES[@]} -gt 0 ]; then
+  for hooks_file in "${HOOKS_FILES[@]}"; do
+    if [ ! -f "$hooks_file" ]; then
+      echo "monitor.sh: hooks file not found: $hooks_file" >&2
+      exit 2
+    fi
+    . "$hooks_file"
+  done
+fi
+
+echo "monitor: watching $n_ids worker(s), interval=${INTERVAL}s, idle-threshold=${IDLE_THRESHOLD}, max-resends=${MAX_RESENDS}"
+
+poll_round=0
+done_count=0
+
+# --- why this run stopped (CommandMate #1728) -------------------------------
+#
+# A 25-minute supervision run once ended at exit 144 having printed nothing but
+# its own startup line, while both workers it was watching kept running unwatched.
+# Nothing in the log said whether the loop had died or the workers were simply
+# quiet, and nothing said what killed it. Three additions close that:
+#
+#   1. every signal bash can catch is named before the loop gives up;
+#   2. any exit that is not one of the two documented termini is reported with
+#      the round it happened on and how many workers were still being watched;
+#   3. `--heartbeat` (below) proves the loop is alive between verdicts.
+#
+# 1 and 2 go to stderr carrying `ERROR`/`WARN`; 3 goes to stdout carrying
+# `alive`. Each is a word an operator's `grep -Ei` can keep — which the hooks
+# diagnostics in the primary half of that Issue were not, and that is exactly
+# how a run this broken stayed invisible.
+#
+# `run_ended` starts at 1 so every pre-loop exit — bad flag, bad id, missing
+# hooks file — stays byte-identical to before; it drops to 0 for the duration of
+# the loop only. The traps are installed HERE, not next to `mktemp`, because
+# they read `n_ids` / `poll_round` / `done_count` and this script runs under
+# `set -u`.
+run_ended=1
+
+# Issue #1950: only the signal that actually stopped the run gets to explain
+# itself. A second one arriving while the first is still mid-report must not
+# take the story over — the latch that enforces that lives in
+# `report_fatal_signal` below.
+fatal_signal_seen=""
+
+report_exit() {
+  re__rc=$?
+  if [ "$run_ended" = "0" ]; then
+    echo "monitor: ERROR exiting on poll round $poll_round with $done_count/$n_ids worker(s) complete (rc=$re__rc) — the rest are now UNMONITORED" >&2
+  fi
+  cleanup
+}
+
+# Fatal by default: report, then exit 128+n so a supervising shell still sees the
+# conventional status. `cleanup` runs from the EXIT trap that follows.
+#
+# The latch on `fatal_signal_seen` is load-bearing, not housekeeping (Issue
+# #1950). The usual way this loop dies is `spawnSync(..., { timeout })`, and node
+# delivers SIGTERM and closes the child's stdio in the same breath. The `echo`
+# below then writes into a pipe nobody is reading, collects a SIGPIPE for it,
+# and — without the latch — re-enters here as PIPE and exits 141 where the
+# caller was owed 143. A timeout that surfaces as `status: 141` with empty
+# stderr reads like an argument about exit codes and is nothing of the sort;
+# working that out cost Issue #1950 the better part of a day.
+#
+# SIGPIPE stays reportable. A lone one — `monitor.sh | head`, the case the PIPE
+# trap was added for — is the FIRST signal, so it finds the latch open, prints,
+# and exits 141 exactly as before. Only a signal that lands on a shutdown
+# already in progress is dropped, and the one already in progress is the one
+# that explains what happened.
+report_fatal_signal() {
+  if [ -n "$fatal_signal_seen" ]; then return; fi
+  fatal_signal_seen=$1
+  echo "monitor: ERROR caught SIG$1 (signal $2) on poll round $poll_round — monitoring stops here" >&2
+  exit $((128 + $2))
+}
+
+# Ignored by default (SIGURG is delivered by the kernel on out-of-band socket
+# data and normally discarded). Trapping it does NOT make it fatal — the handler
+# returns and the loop continues — it only makes a delivery visible, which is
+# what the 144 above could not be checked against. No number is printed: SIGURG
+# is 16 on macOS and 23 on Linux.
+report_benign_signal() {
+  echo "monitor: WARN caught SIG$1 on poll round $poll_round — ignored, monitoring continues" >&2
+}
+
+trap report_exit EXIT
+trap 'report_fatal_signal HUP 1' HUP
+trap 'report_fatal_signal INT 2' INT
+trap 'report_fatal_signal QUIT 3' QUIT
+trap 'report_fatal_signal PIPE 13' PIPE
+trap 'report_fatal_signal TERM 15' TERM
+trap 'report_benign_signal URG' URG
+
+run_ended=0
+while [ "$done_count" -lt "$n_ids" ]; do
+  done_count=0
+  i=0
+  while [ "$i" -lt "$n_ids" ]; do
+    wid=${IDS[$i]}
+    inst=${INSTANCES[$i]}
+    cap_args=${CAP_ARGS[$i]}
+    lbl=${LABELS[$i]}
+    i=$((i + 1))
+
+    if [ -f "$STATE_DIR/$lbl.done" ]; then
+      done_count=$((done_count + 1))
+      continue
+    fi
+
+    poll="$STATE_DIR/$lbl.poll.json"
+    # cap_args is unquoted on purpose: it is either empty or the validated
+    # `--agent <tool> --instance <id>` pair, neither of which can contain a space.
+    # shellcheck disable=SC2086
+    if ! $CM capture "$wid" --json $cap_args > "$poll" 2>/dev/null; then
+      # Transient empty/parse frame (redraw): do not advance the idle streak,
+      # do not treat as idle (feedback_orchestrate_monitor_recipe).
+      echo "monitor[$lbl]: capture failed, skipping poll"
+      continue
+    fi
+
+    # The helper's exit code matters as much as capture's above (CommandMate
+    # #1614). An empty `state` is NOT inert: `case "$state"` below matches
+    # nothing, but the value is still handed to verify-completion.sh, where it is
+    # not a live signal and therefore falls through to the idle heuristic.
+    # Measured on bash 3.2.57:
+    #   verify-completion.sh --started 1 --state '' --idle-streak 10 \
+    #     --idle-threshold 5 --commits 2 --uncommitted 0 --task-status ''
+    #   -> COMPLETE
+    # i.e. a classifier that dies turns a busy worker into a COMPLETE report.
+    # Skipping the poll — the treatment a failed capture already gets — is what
+    # keeps the empty value away from the decision.
+    state=$("$CLASSIFY" --json "$poll")
+    classify_rc=$?
+    if [ "$classify_rc" -ne 0 ] || [ -z "$state" ]; then
+      echo "monitor[$lbl]: classify-state failed (exit $classify_rc), skipping poll"
+      continue
+    fi
+
+    # The intervention target, derived from THIS poll: the tool the server just
+    # resolved for this worktree/instance, so the pane we may type into is the
+    # pane we just classified. Announced once per worker because a misdirected
+    # intervention is otherwise invisible until the first one is needed — and by
+    # then a missed approval has already stalled the worker (Issue #1602).
+    cli_tool=$(ml_json_scalar "$poll" cliToolId)
+    session=$(ml_session_name "$wid" "$cli_tool" "$inst" "$SESSION_PREFIX") || session=""
+    if [ ! -f "$STATE_DIR/$lbl.target" ] && [ -n "$session" ]; then
+      echo "$session" > "$STATE_DIR/$lbl.target"
+      echo "monitor[$lbl]: intervention target = $session"
+    fi
+
+    started=$(read_state "$lbl" started)
+    streak=$(read_state "$lbl" streak)
+
+    case "$state" in
+      GENERATING)
+        echo "1" > "$STATE_DIR/$lbl.started"
+        echo "0" > "$STATE_DIR/$lbl.streak"
+        ;;
+      RATE_LIMIT)
+        # Resume immediately; never sleep through a rate limit. The log follows
+        # the send and names the session, so "resumed" cannot be claimed for keys
+        # that went nowhere.
+        if send_to_pane "$lbl" "$session" "rate limit 'a'" a Enter; then
+          echo "monitor[$lbl]: rate limit -> sent 'a' to $session"
+        fi
+        echo "0" > "$STATE_DIR/$lbl.streak"
+        ;;
+      PROMPT)
+        # Approve or hold — never unconditionally (Issue #59). The verdict is
+        # read out of THIS poll's promptData, the same payload the pane was
+        # classified from, so what Enter would select is judged rather than
+        # assumed. ml_prompt_enter_verdict returns `approve` only for a binary
+        # approval whose default option is affirmative.
+        if [ "$AUTO_APPROVE" = "1" ]; then
+          prompt_verdict=$(ml_prompt_enter_verdict "$poll")
+        else
+          prompt_verdict="hold:disabled"
+        fi
+        if [ "$prompt_verdict" = "approve" ]; then
+          # Silent auto-approve, so the notifier is not flooded — but the counter
+          # moves ONLY on a delivered Enter, so `approvals=` on the COMPLETE line
+          # is a count of approvals that happened. Before #1602 it counted
+          # attempts at a session that did not exist, i.e. the loop reported
+          # approvals it had never made. Silence still means "approved"; a miss
+          # is on stderr.
+          if send_to_pane "$lbl" "$session" "prompt approval Enter" Enter; then
+            approvals=$(read_state "$lbl" approvals)
+            approvals=$((approvals + 1))
+            echo "$approvals" > "$STATE_DIR/$lbl.approvals"
+          fi
+        else
+          # A hold is NOT silent: nothing resumes the worker now, so the operator
+          # has to be told once — and only once per prompt, or a prompt left up
+          # for twenty polls reports twenty stalls and inflates `held=`. The
+          # signature is the promptData block, which is stable while the prompt
+          # is on screen and different for the next one.
+          hold_sig=$(ml_prompt_signature "$poll" "$prompt_verdict")
+          if [ "$hold_sig" != "$(read_state "$lbl" heldsig)" ]; then
+            echo "$hold_sig" > "$STATE_DIR/$lbl.heldsig"
+            held=$(read_state "$lbl" held)
+            held=$((held + 1))
+            echo "$held" > "$STATE_DIR/$lbl.held"
+            echo "monitor[$lbl]: PROMPT held, no Enter sent — $(prompt_hold_reason "$prompt_verdict" "$poll"). Answer it in the pane, or with 'commandmate respond $wid'"
+          fi
+        fi
+        echo "0" > "$STATE_DIR/$lbl.streak"
+        ;;
+      IDLE)
+        streak=$((streak + 1))
+        echo "$streak" > "$STATE_DIR/$lbl.streak"
+        # Retry-exhaustion death: the CLI burned through its own backoff
+        # (`attempt 10/10`), printed a terminal API error and fell back to an idle
+        # prompt. Nothing resumes from here on its own, and without a resend the
+        # worker is either left forever or — worse — reported COMPLETE with
+        # half-finished uncommitted work once the streak crosses the threshold.
+        # Deliberately narrow, because this branch injects input:
+        #   - IDLE only, so a live backoff (GENERATING via ml_is_retrying) and an
+        #     open prompt are never interrupted;
+        #   - the idle threshold must already be reached, so a transient frame
+        #     cannot trigger it;
+        #   - ml_has_terminal_api_error reads the current pane only, so an error
+        #     that has scrolled out of view after a successful resume no longer
+        #     counts;
+        #   - capped by --max-resends, then escalated to the operator.
+        if [ "$streak" -ge "$IDLE_THRESHOLD" ] && ml_has_terminal_api_error "$poll"; then
+          resends=$(read_state "$lbl" resends)
+          if [ "$resends" -lt "$MAX_RESENDS" ]; then
+            # Budget and streak move only on a delivered resend: a resend that
+            # never reached a pane must not spend the budget and then escalate as
+            # "budget spent", which reports an exhausted recovery that was never
+            # attempted. An undelivered one keeps the streak, so the next poll
+            # retries and keeps reporting the failure (Issue #1602).
+            if send_to_pane "$lbl" "$session" "resend '$RESEND_MESSAGE'" "$RESEND_MESSAGE" Enter; then
+              resends=$((resends + 1))
+              echo "$resends" > "$STATE_DIR/$lbl.resends"
+              echo "monitor[$lbl]: terminal API error at an idle prompt -> resent to $session ($resends/$MAX_RESENDS)"
+              echo "0" > "$STATE_DIR/$lbl.streak"
+            fi
+          else
+            echo "monitor[$lbl]: terminal API error and resend budget spent ($MAX_RESENDS) — operator needed"
+          fi
+        fi
+        ;;
+      NOT_RUNNING)
+        # No pane to type into; the streak drives the NOT_STARTED report instead.
+        streak=$((streak + 1))
+        echo "$streak" > "$STATE_DIR/$lbl.streak"
+        ;;
+    esac
+
+    # Leaving PROMPT clears the held-prompt identity, so the NEXT prompt is
+    # reported even when it is byte-identical to the one just answered (a rerun
+    # of the same command asks the same question). Held prompts are episodes, not
+    # polls.
+    if [ "$state" != "PROMPT" ]; then
+      : > "$STATE_DIR/$lbl.heldsig"
+    fi
+
+    post_started=$(read_state "$lbl" started)
+    post_streak=$(read_state "$lbl" streak)
+    commits=$(count_commits "$wid")
+    uncommitted=$(count_uncommitted "$wid")
+
+    # Primary completion source (Issue #1589). `unavailable` is the version gate:
+    # the hook was wired, so task state was *promised*, and it could not be read.
+    # Announced once per worker and then downgraded to empty, which is what makes
+    # verify-completion.sh fall back to the capture heuristics. Announcing beats
+    # degrading quietly — a run that silently loses its adjudicated source still
+    # prints plausible COMPLETE lines, and nothing in the log says they were
+    # inferred. Polling continues, so a server that comes back is picked up again.
+    task_status=$(read_task_status "$wid")
+    if [ "$task_status" = "unavailable" ]; then
+      task_status=""
+      if [ ! -f "$STATE_DIR/$lbl.taskgate" ]; then
+        touch "$STATE_DIR/$lbl.taskgate"
+        echo "monitor[$lbl]: task state unavailable (CommandMate without 'commandmate task', server down, or unknown worktree) — FALLBACK MODE: completion is inferred from capture, not adjudicated. Diagnose with: commandmate task list $wid --limit 1"
+      fi
+    fi
+
+    verdict=$("$VERIFY" \
+      --started "$post_started" \
+      --state "$state" \
+      --idle-streak "$post_streak" \
+      --idle-threshold "$IDLE_THRESHOLD" \
+      --commits "$commits" \
+      --uncommitted "$uncommitted" \
+      --task-status "$task_status")
+    verify_rc=$?
+    # The `case` below has no default arm, so an empty verdict would drop the
+    # poll without a word: the loop keeps running, prints nothing, and decides
+    # nothing while looking healthy (CommandMate #1614). Report it with the
+    # inputs it was given, so the call can be reproduced by hand rather than
+    # guessed at.
+    if [ "$verify_rc" -ne 0 ] || [ -z "$verdict" ]; then
+      echo "monitor[$lbl]: verify-completion failed (exit $verify_rc), no verdict this poll (state=$state started=$post_started streak=$post_streak commits=$commits uncommitted=$uncommitted task=${task_status:--})"
+      continue
+    fi
+
+    # POLL_LINE — one line per poll per worker, opt-in via --verbose. Fixed field
+    # order so a run can be reduced mechanically, e.g.
+    #   grep -o 'poll [0-9]* -> [A-Z_]*' log | awk '{print $4}' | sort | uniq -c
+    # gives the state distribution, and the trailing key=value pairs carry the
+    # inputs verify-completion.sh actually saw, i.e. the evidence behind the
+    # verdict rather than the verdict alone (Issue #1533, #1513 G2).
+    #
+    # `task=` is appended last and only when the ledger answered. Appending keeps
+    # every contract-less poll line byte-identical to the pre-#1589 format — the
+    # regression suite pins those lines, and a `task=-` on runs that never had a
+    # contract would be noise claiming to be evidence. `grep -o 'task=[a-z_]*'`
+    # reduces it the same way the other fields reduce.
+    if [ "$VERBOSE" = "1" ]; then
+      poll_line="monitor[$lbl]: poll $((poll_round + 1)) -> $state started=$post_started streak=$post_streak commits=$commits uncommitted=$uncommitted verdict=$verdict"
+      if [ -n "$task_status" ]; then
+        poll_line="$poll_line task=$task_status"
+      fi
+      echo "$poll_line"
+    fi
+
+    case "$verdict" in
+      COMPLETE)
+        # `held=` is appended only when a prompt was actually held, for the same
+        # reason `task=` is appended only when the ledger answered: a run that
+        # never held anything keeps the pre-0.5.0 line byte-identical, and a
+        # `held=0` on it would be a counter pretending to be evidence. Present
+        # means "this many prompts went unanswered by the loop" — grep
+        # 'PROMPT held' for which ones.
+        complete_counters="approvals=$(read_state "$lbl" approvals)"
+        if [ "$(read_state "$lbl" held)" -gt 0 ]; then
+          complete_counters="$complete_counters held=$(read_state "$lbl" held)"
+        fi
+        echo "monitor[$lbl]: COMPLETE ($complete_counters)"
+        touch "$STATE_DIR/$lbl.done"
+        done_count=$((done_count + 1))
+        ;;
+      VERIFY_FAILED)
+        # Terminal like COMPLETE — the contract has been adjudicated, so there is
+        # nothing left to wait for — but explicitly not mergeable. Named
+        # differently so an operator scanning the stream cannot read it as a pass.
+        echo "monitor[$lbl]: VERIFY_FAILED — contract gates failed; do not merge. Run 'commandmate verify $wid --json' for the failing gate, then re-instruct"
+        touch "$STATE_DIR/$lbl.done"
+        done_count=$((done_count + 1))
+        ;;
+      NOT_STARTED)
+        if [ "$(read_state "$lbl" streak)" -ge "$IDLE_THRESHOLD" ]; then
+          echo "monitor[$lbl]: NOT_STARTED — idle with no work; check the composer / Enter"
+        fi
+        ;;
+    esac
+  done
+
+  poll_round=$((poll_round + 1))
+
+  # Liveness (CommandMate #1728). Emitted before the stop conditions so the last
+  # thing in a log is always evidence of how far the loop got, and on stdout
+  # because it is part of the operator stream rather than a fault. Silence
+  # between verdicts is normal — this is what makes silence *after* the last line
+  # diagnosable.
+  if [ "$HEARTBEAT" -gt 0 ] && [ $((poll_round % HEARTBEAT)) -eq 0 ]; then
+    echo "monitor: alive (poll=$poll_round, complete=$done_count/$n_ids)"
+  fi
+
+  # Deterministic stop for bounded runs: end the loop from the inside after
+  # MAX_POLLS rounds rather than relying on something outside to kill it. Checked
+  # after the completion tally so a run that finishes on its final round still
+  # reports "all complete"; skipped entirely when MAX_POLLS is 0.
+  if [ "$done_count" -lt "$n_ids" ] && [ "$MAX_POLLS" -gt 0 ] && [ "$poll_round" -ge "$MAX_POLLS" ]; then
+    echo "monitor: reached --max-polls ($MAX_POLLS) after $poll_round poll round(s); stopping"
+    run_ended=1
+    exit 0
+  fi
+
+  [ "$done_count" -lt "$n_ids" ] && sleep "$INTERVAL"
+done
+
+run_ended=1
+echo "monitor: all $n_ids worker(s) complete"
