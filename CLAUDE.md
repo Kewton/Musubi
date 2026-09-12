@@ -52,4 +52,27 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 pnpm install          # corepack 経由で pnpm 10.13.1 が使われる
 pnpm check            # lint → typecheck → test（PR前に必ず通す）
 pnpm build
+terraform version     # .terraform-version（1.16.2）を tfenv がピンする
 ```
+
+**検証ゲートの正本は [`.commandmate/verify.yaml`](.commandmate/verify.yaml)。**
+`.github/workflows/ci.yml` の `lint-typecheck-unit` と同じ4段（deps / lint / typecheck / unit）。
+**片方だけ直さない。** 両方を同時に直すこと（ズレると「ローカルは通るが CI で落ちる」が起きる）。
+
+## git worktree で並列作業するとき
+
+**`.env` は追跡していないので worktree には存在しない。** Terraform も
+`verify-cf-tokens.py` も、そのままでは動かない。worktree を作ったら最初にこれを実行する。
+
+```bash
+./infra/scripts/link-env.sh    # primary checkout の .env へ symlink を張る
+```
+
+コピーではなく symlink なのは、トークンが 2026-12-07 に失効するため。
+primary の `.env` を1回直せば全 worktree に効く。
+
+`.commandmate/profiles/musubi.json` の `baseline` に入れてあるので、
+`cmate-worktree-setup` 経由なら自動で走る。**手で worktree を切ったときは自分で実行すること。**
+
+> `.claude/skills` と `.agents/skills` を追跡しているのも同じ理由である。
+> **worktree には tracked なファイルしか複製されない。**

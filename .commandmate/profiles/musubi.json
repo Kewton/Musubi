@@ -1,0 +1,26 @@
+{
+  "id": "musubi",
+  "repository": "Kewton/Musubi",
+  "base": "origin/main",
+  "branch_template": "feat/{number}-{slug}",
+  "worktree_template": "../{repo}-issue-{number}",
+  "baseline": [
+    "./infra/scripts/link-env.sh",
+    "corepack enable >/dev/null 2>&1 || true; pnpm install --frozen-lockfile",
+    "pnpm lint",
+    "pnpm typecheck"
+  ],
+  "scope_companions": {
+    "derive": [],
+    "require": [
+      { "when": "infra/scripts/dep-graph.mjs", "add": ["CLAUDE.md"] },
+      { "when": ".commandmate/verify.yaml", "add": [".github/workflows/ci.yml"] },
+      { "when": ".github/workflows/ci.yml", "add": [".commandmate/verify.yaml"] }
+    ]
+  },
+  "dispatch_defaults": {
+    "auto_yes": false,
+    "wait_timeout": 1800
+  },
+  "verified": false
+}
