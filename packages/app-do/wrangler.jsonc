@@ -1,0 +1,29 @@
+{
+  // ★このサービスは配備しない。local-dev / テスト専用のハーネスである。
+  //   本番経路で DO に触れてよいのは data-api だけ（CLAUDE.md 不変条件・03 §4）。
+  //   `pnpm deploy:dev|staging|production` の --filter は apps/* と packages/data-api だけを
+  //   拾うので、この wrangler.jsonc が deploy に載ることはない。
+  //
+  // ここが `new_sqlite_classes` migration の正本である。data-api（Issue #6）が
+  // 自分の wrangler.jsonc に同じ class_name / tag を書くときは、この形をそのまま写す。
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "musubi-dev-app-do",
+  "main": "src/dev-entry.ts",
+
+  // 着手時（2026-09-13）に固定する。2026-09-11 は同梱 workerd 1.20260911.1 が
+  // 受け付ける最大値。これより新しい日付にすると wrangler が警告を出す。
+  "compatibility_date": "2026-09-11",
+  "observability": { "enabled": true },
+
+  // ルートを持たない。workers_dev も切る。到達経路を作らないことで
+  // 「packages/* は Service Binding 経由でしか到達できない」を構成でも守る。
+  "workers_dev": false,
+
+  "durable_objects": {
+    "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }]
+  },
+
+  // ★ new_classes ではなく new_sqlite_classes。
+  //   KV バックエンドで作ると後から SQLite へ移せず、そもそも Free では KV 型 DO は使えない。
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppInstanceDO"] }]
+}
