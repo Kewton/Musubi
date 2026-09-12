@@ -1,0 +1,115 @@
+schema_version: 1
+id: cmate-verify
+name: cmate-verify
+version: 0.5.1
+summary: 検証ゲートを .commandmate/verify.yaml に宣言し、未着手ガードとプライマリ checkout skip を挟んで worktree で逐次実行し、出力ではなく実 exit code で合否を判定する bash 3.2 互換ランナー。
+description: >-
+  「このリポジトリで何が通れば合格か」を `.commandmate/verify.yaml`（形式 v1）に宣言し、
+  各ゲートを `sh -c "$cmd" > log 2>&1` で走らせて `$?` を直接読むランナーである。出力の grep で
+  合否を決めない（grep へ渡した `$?` は非ゼロ終了を隠すため、要約を読んだ判定は失敗を PASS と
+  報告する）。役割は 2 つ。まだ設定を持たないリポジトリの CI 定義・package manifest からゲートを
+  起案し、出所とセットで提示してユーザーの確認を得てから書き出すことと、CommandMate が入って
+  いない環境でも bash と git だけで同じ verify.yaml から同じ判定を出すことである。コマンド系
+  ゲートの前に組み込みゲート work-evidence が走り、変更の痕跡がゼロなら not_started (exit 21)
+  として 1 つもゲートを実行しない。プライマリ checkout では既定でコマンド系ゲートを実行せず、
+  その run は passed ではなく skipped (exit 22) として区別する。1 つのゲートが失敗しても残りは
+  実行し、1 回の run で全ての失敗を報告する。受理する YAML はサブセットに限られ、規約外の記述は
+  best-effort で解釈せず exit 2 で拒否する。stdout は 1 ゲート 1 行の機械可読形式を保ち、失敗
+  ログの末尾は stderr へ出す。verify.yaml v1 仕様そのものの改訂・PR 作成・merge・デプロイは
+  行わない。
+capabilities:
+  - CI 定義・package.json・Makefile・言語マニフェストからゲートを起案し、確認を得てから書き出す
+  - verify.yaml v1 のサブセットを awk で読み、規約外の記述を解釈せず exit 2 で拒否する
+  - 各ゲートを sh -c で実行し、出力の grep ではなく実 exit code で PASS / FAIL を判定する
+  - ゲートごとの timeout を watchdog で実装し、プロセスグループごと終了させて孤児を残さない
+  - 1 つ失敗しても残りのゲートを実行し、1 回の run で全ての失敗を報告する
+  - commit 数と uncommitted 数による work-evidence ガードで未着手を not_started に分離する
+  - プライマリ checkout ではコマンド系ゲートを実行せず、skipped を passed と区別して返す
+  - stdout を 1 ゲート 1 行の機械可読形式に保ち、失敗ログの末尾は stderr へ出す
+  - --gates で一部だけ実行し、存在しない id は静かな空実行ではなく設定エラーにする
+expected_outcomes:
+  - 「何が通れば合格か」がリポジトリ内の file として宣言され、後から検証・レビューできる
+  - 出力が緑でも exit code が非 0 のコマンドが PASS と誤報告されない
+  - 変更を 1 つも行っていないセッションが「全ゲート PASS」と報告されない
+  - 何も実行しなかった run が passed ではなく skipped (exit 22) として区別される
+  - 不正な verify.yaml が一部だけ実行されて passed になることがない
+  - timeout したゲートの子プロセスが run のあとに残らない
+  - CommandMate が無い環境でも同じ verify.yaml から同じ判定が得られる
+provider:
+  name: CommandMate
+  url: https://github.com/Kewton/CommandMate
+license: MIT
+homepage: https://github.com/Kewton/commandmate-skills
+keywords:
+  - verification
+  - gate
+  - exit-code
+  - quality-gate
+  - ci
+  - lint
+  - test
+  - build
+  - worktree
+  - git
+  - bash
+  - yaml
+  - timeout
+  - work-evidence
+compatibility:
+  commandmate: '>=0.11.0 <1.0.0'
+  agents:
+    - agent: claude
+      support: native
+      evidence: Discovery path measured 2026-07-26 on Claude Code 2.1.220 with CommandMate 0.15.0 — an installed skill is found under .claude/skills and matches in the slash palette. The mechanism is package-independent; this package was not separately measured.
+    - agent: codex
+      support: native
+      evidence: Discovery path measured 2026-07-26 on Codex CLI 0.145.0 — SKILL.md is read from .agents/skills (model self-report, not a mechanical trace). That version exposes no slash command, so invoke by name. This package was not separately measured.
+    - agent: gemini
+      support: unknown
+      evidence: Not measured for this version. The runner needs only bash and git, so the procedure is usable by hand; discovery is unverified.
+    - agent: opencode
+      support: native
+      evidence: 'Measured 2026-08-25 on opencode 1.18.22 (CommandMate#2037) and re-checked 2026-09-04 on 1.18.27: GET /skill lists SKILL.md from .agents/skills and .claude/skills; submitting /<name> loads the skill. Scanned at boot, restart after install. Not in opencode''s own slash palette.'
+    - agent: command-code
+      support: native
+      evidence: 'Measured 2026-09-04 on Command Code 1.47.0 (CommandMate#2322): discovered from .agents/skills (cmd skills list, /skills picker); /<name> emits skill_loaded and runs. .claude/skills is not read; the installer''s .agents/skills copy suffices. No restart needed.'
+requirements:
+  commands:
+    - name: bash
+      version_range: '>=3.2.0'
+    - name: git
+    - name: awk
+  network_hosts: []
+declared_permissions:
+  - filesystem_read
+  - filesystem_write
+  - process_execution
+  - network_access
+declared_risk: high
+risk_rationale: >-
+  実行 bit 付きの script（scripts/verify-run.sh）を 1 本同梱するため computed risk は high で、
+  moderate 申告は SKILLS_RISK_UNDERSTATED で拒否される。ランナーは対象リポジトリの verify.yaml に
+  宣言された任意コマンドを sh -c で実行するので、実効的な権限はその file の内容に等しい。ゲートは
+  --cwd の worktree 内で走り、既定ではプライマリ checkout で実行しない。runner 自身は network へ
+  接続しないが、典型的なゲート（npm run lint 等）が接続するため network_access を宣言し、host は
+  対象リポジトリ依存なので固定しない。書き込みは mktemp の作業 directory と、確認を得て起案する
+  verify.yaml に限られる。credential は読まない。
+files:
+  - path: SKILL.md
+    sha256: d28fb20a4081a4fa2daa75390a06daa5faf44e44ea68559aba1b1c61dc58f070
+    size: 22260
+    kind: skill_md
+    executable: false
+    script: false
+  - path: references/release-notes.md
+    sha256: f1c58cdb094cfc859d94a9ae217c227a949dcd1e580d0786643cddbff15d00b4
+    size: 8413
+    kind: instruction
+    executable: false
+    script: false
+  - path: scripts/verify-run.sh
+    sha256: 505a8d145707a53badca1dda0faaa6d9206b2985abf4265ca216ac4c85bc9561
+    size: 43243
+    kind: script
+    executable: true
+    script: true

@@ -1,0 +1,196 @@
+schema_version: 1
+id: cmate-orchestrate-monitor
+name: cmate-orchestrate-monitor
+version: 0.8.0
+summary: commandmate wait が見ない停滞（プロンプト待ち・rate limit・リトライ枯渇死）を capture の 1 フレームから検知して回収し、介入と判定の全件を機械可読なログに残す監視レシピ。契約付き dispatch の一次監督は cmate-orchestrate の wait ループで、本 Skill はその回収と可観測性のサイドカーである。
+description: >-
+  tmux セッション上で走る worker（coding CLI）を監督するための、実運用で検証済みの監視レシピである。
+  この Skill の価値は完了判定そのものではなく（契約付き委任の最終裁定は `commandmate wait --verify` の
+  exit code であり、監視が読むタスク状態はその写しである）、**wait からは見えない停滞の回収と
+  可観測性**にある。すなわち、プロンプトで止まった worker・usage limit で止まった worker・
+  CLI がリトライを使い切って死んだ worker を検知し、何をどのペインへ送ったか、何を送らずに保留したか、
+  どの入力で完了判定を下したかを全件ログへ残す。同梱の bash script が
+  `commandmate capture <id> --json` の 1 フレームを 1 つの状態トークン（NOT_RUNNING / GENERATING /
+  PROMPT / RATE_LIMIT / IDLE）へ落とす。アンカー照合は ANSI エスケープと NBSP を正規化したうえで
+  「いま画面に出ている領域」に限定するため、スクロールバックに流れた作業指示文や spinner 行に
+  誤マッチしない。分類順（NOT_RUNNING → リトライ backoff → PROMPT → GENERATING → RATE_LIMIT → IDLE）
+  自体がガードで、各分岐は入力注入か抑止のどちらかを引き起こす。介入は 3 種類だけで、条件つきの
+  プロンプト承認、usage limit バナー検出時の即時再開、リトライ枯渇後の上限つき再送に限られる。
+  プロンプトへの Enter は tmux ペインへ直接入りサーバの承認制御を通らないため、分類だけでは送らない。
+  そのフレームの promptData が「デフォルト選択肢が承認である二択」を示したときだけ送り、
+  契約 autoYes ポリシーがサーバ側で保留したもの・デフォルトの無い選択・promptData の無いフレーム・
+  未知の型は Enter を送らず理由つきで 1 度だけ報告して held に数える。`--no-auto-approve` で全件保留に
+  できる（契約付き dispatch を監督するときの形）。再送は IDLE かつ idle 閾値到達かつ現ペインに
+  terminal API error があるときのみ発火し、上限到達後はオペレータへエスカレーションする。介入の宛先は
+  固定 prefix の連結ではなく、そのポーリングの capture ペイロードの cliToolId から
+  `mcbd-<cliToolId>-<worktree-id>[-<instance suffix>]` として導出するため、分類したペインと入力する
+  ペインが同一であることが構造的に保証され、claude と codex が混在する fleet でもフラグ無しで成立する。
+  送信前に tmux has-session で完全一致指定（`=<name>:`）の存在を検証し、失敗は握り潰さず stderr へ
+  報告する。ログは送信の結果を書き、承認カウンタと再送予算は配信できたときだけ動く。worktree-id は
+  `<id>@<instance-id>` 形式で agent instance を指定でき、指定は capture 側と送信先の両方に効く。
+  監視を止めてよいかの判定は、ペイン生存 veto → 裁定済みタスク状態 → STARTED ガード → idle 連続と
+  実作業量、の順で固定してある。タスク状態と作業量カウンタはどちらも差し替え可能なフックとして
+  外部供給し（hooks-task.sh は `commandmate task list <id> --limit 1` の最新行を、hooks-git.sh は
+  worktree-id を実 checkout へ解決して git から数える）、指定した hooks file が存在しない場合は
+  黙ってスタブへ落ちずに即座に失敗する。タスク状態を配線したのに引けなかった場合は worker ごとに
+  1 度フォールバックモードを宣言してから推定へ降格する（黙って劣化しない）。--verbose は
+  1 ポーリング 1 行の固定フォーマットで、状態と完了判定に実際に渡した入力を機械可読に残す
+  （既定出力は変わらない）。worker の作成・dispatch・作業指示の送信・PR 作成・merge・Issue の close は
+  行わない。COMPLETE は監視を止めてよいという判定であってマージ可否の裁定ではない。
+capabilities:
+  - 実行契約のタスク状態を一次ソースとして終局状態だけで裁定し（failed / cancelled は VERIFY_FAILED）、ペイン生存 veto をその前に・非終局状態をフォールバックの後に置いて古い裁定と STARTED ガード無効化を防ぐ
+  - タスク状態を引けない CommandMate では worker ごとに 1 度宣言してからフォールバックモードへ入る（黙って劣化しない）
+  - capture の 1 フレームを NOT_RUNNING / GENERATING / PROMPT / RATE_LIMIT / IDLE へ分類する（ANSI と NBSP を正規化し現ペインに限定するのでスクロールバックへ誤マッチしない）
+  - 生成中・CLI 自身の backoff 中には注入せず、条件つきプロンプト承認・usage limit からの即時再開・リトライ枯渇後の上限つき再送だけを行い、上限到達でエスカレーションする
+  - プロンプトへの Enter を promptData で判定し、デフォルトが承認である二択だけ承認して、契約 autoYes ポリシーの保留・デフォルト無しの選択・promptData 無しのフレームは送らずに理由つきで報告する（--no-auto-approve で全件保留）
+  - 介入の宛先を capture ペイロードの cliToolId と `<worktree-id>@<instance-id>` 指定から導出し、分類したペインと入力するペインを一致させる（固定 prefix を連結しない。instance 指定は capture 側にも効く）
+  - 送信前に tmux has-session で完全一致指定の存在を検証し、配信できなかった介入を握り潰さず報告する（承認カウンタと再送予算は配信時のみ進む）
+  - フォールバック時は生成アンカーの観測有無と実 commit / uncommitted 数で STARTED ガード付きの完了判定を下す（worktree-id は現行のディレクトリ由来 id を第 1 候補に、ブランチ由来の旧 2 規則を後方互換として突合するので、メイン worktree・detached HEAD・ブランチ名と一致しない id も実測できる）
+  - タスク状態と完了カウンタを差し替え可能なフックとして供給し、指定 file が無ければ黙って続行せず失敗する
+  - 1 ポーリング 1 行の固定フォーマットで判定とその入力を機械可読に残し、依存コマンド（capture / 状態分類 / 完了判定 / git）を exit code で判定して失敗を「作業ゼロ」と取り違えず worker 1 回だけ ERROR / WARN 付きで報告し、監視自身の生存も heartbeat とシグナル・EXIT 報告として残す
+expected_outcomes:
+  - 検証ゲート不合格の worker が COMPLETE と報告されず、マージ候補に混ざらない
+  - 完了判定がサーバ側の裁定か推定かをログから区別でき、タスク状態を参照できない環境で黙って推定へ劣化することがない
+  - 生成中の worker が idle と誤分類されず、思考が長い worker も停止扱いされない
+  - 介入がプロンプト・usage limit・枯渇後の再送に限られ、健全な worker へ入力が注入されない
+  - 実行契約が autoYes ポリシーで保留させたプロンプトや、Enter がデフォルト選択肢の確定になる選択が、監視ループのキー送出で意図せず確定されない
+  - 介入が空振りのまま「送った」と記録されることがなく、claude / codex 混在でも非既定 instance でもフラグ無しで正しいペインへ届く
+  - 未起動 worker や作業の痕跡が無い worker が COMPLETE と誤報されず、ディレクトリ名で採番された worktree でもカウンタが恒久 0 に沈まない
+  - 完了フック未配線のまま「全 worker 完了」と報告されることがなく、NOT_STARTED として露見する
+  - 総ポーリング数・状態分類の分布・介入と保留の全件・完了判定の根拠（started / streak / commits / uncommitted / task）が監視ログから機械的に取り出せ、監視が沈黙したときそれが健全な沈黙か監視の死かを区別できる
+  - 品質ゲートや依存コマンドの非 0 終了が「テスト緑」「作業ゼロ」の見た目に隠されない（git が答えられなかった worker が NOT_STARTED と誤報されず、判定器が落ちたポーリングが無言で素通りせず、その報告がオペレータの grep で消えない）
+provider:
+  name: CommandMate
+  url: https://github.com/Kewton/CommandMate
+license: MIT
+homepage: https://github.com/Kewton/commandmate-skills
+keywords:
+  - monitoring
+  - supervision
+  - orchestration
+  - worker
+  - tmux
+  - capture
+  - completion
+  - parallel
+  - guard
+  - bash
+compatibility:
+  commandmate: '>=0.15.0 <1.0.0'
+  agents:
+    - agent: claude
+      support: native
+      evidence: Measured 2026-07-26 on Claude Code 2.1.220 with CommandMate 0.15.0. An installed skill was discovered from .claude/skills and matched in the slash palette; the installer writes .agents/skills and .claude/skills byte-identically.
+    - agent: codex
+      support: native
+      evidence: Measured 2026-07-26 on Codex CLI 0.145.0. It reads SKILL.md from .agents/skills (model self-report of the absolute path, not a mechanical trace). This version does not expose skills as slash commands; invoke by name or run the scripts.
+    - agent: gemini
+      support: unknown
+      evidence: Not measured for this version. Readable as a procedure; discovery unverified.
+    - agent: opencode
+      support: native
+      evidence: 'Measured 2026-08-25 on opencode 1.18.22 (CommandMate#2037) and re-checked 2026-09-04 on 1.18.27: GET /skill lists SKILL.md from .agents/skills and .claude/skills; submitting /<name> loads the skill. Scanned at boot, restart after install. Not in opencode''s own slash palette.'
+    - agent: command-code
+      support: native
+      evidence: 'Measured 2026-09-04 on Command Code 1.47.0 (CommandMate#2322): discovered from .agents/skills (cmd skills list, /skills picker); /<name> emits skill_loaded and runs. .claude/skills is not read; the installer''s .agents/skills copy suffices. No restart needed.'
+requirements:
+  commands:
+    - name: bash
+      version_range: '>=3.2.0'
+    - name: commandmate
+    - name: git
+    - name: tmux
+  network_hosts:
+    - registry.npmjs.org
+declared_permissions:
+  - filesystem_read
+  - filesystem_write
+  - process_execution
+  - network_access
+declared_risk: high
+risk_rationale: >-
+  Ships executable scripts (high risk). Runs `commandmate capture` per poll and, with hooks wired,
+  reads the task ledger and worker checkouts read-only. It types into worker panes via tmux — Enter,
+  "a" and the resend message only, delivered to an existence-checked exact-match session derived
+  from that poll. Enter bypasses the server's approval control, so it needs a promptData whose
+  default option is affirmative; anything else is held and reported. It never sends task text or
+  mutates a repo.
+files:
+  - path: SKILL.md
+    sha256: 1f9fc5f7c6313be9ea27e5087a8f6a60b32b3aecc1ca5c90fb63b1c5c31e483c
+    size: 25731
+    kind: skill_md
+    executable: false
+    script: false
+  - path: references/agent-compatibility.md
+    sha256: d488078b35b67b96f1824370462c5288733f159b564a36993bbe2e1df52a5fca
+    size: 4873
+    kind: instruction
+    executable: false
+    script: false
+  - path: references/evidence.md
+    sha256: 7c133b5debfb4b2d494cafba27a8e26d224c791745e2c5f6eb0929836d9b0f8b
+    size: 27795
+    kind: instruction
+    executable: false
+    script: false
+  - path: references/monitor-contract.md
+    sha256: 924af3e078f18b980617aa0ec051c5a74cad51b1bde144b455cd8ae29876b33e
+    size: 25240
+    kind: instruction
+    executable: false
+    script: false
+  - path: references/recipe-rationale.md
+    sha256: 2208d0994c974dbaabd86138b31e2753db0c604f4ad5ecdee2d27b0c69393ea9
+    size: 24375
+    kind: instruction
+    executable: false
+    script: false
+  - path: scripts/classify-state.sh
+    sha256: 41750af3480a11a5b4f2c74a2bc5dfd5111f41291a2ccca4a15f25ff502e072b
+    size: 2590
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/hooks-git.sh
+    sha256: bf06f5ba4bae296258e6a45f46b08f2b3164c066779f8495592cfe6879cc812f
+    size: 17388
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/hooks-task.sh
+    sha256: 5000b7ce72e34a18f56cbf7685be0c187619dc76ae9d6a66e00a3c5cc7018f1e
+    size: 4477
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/monitor-lib.sh
+    sha256: 3586971a77c9c0912bc6d8d1900983f84541860f6ed960fbfd7601234781cd6d
+    size: 21955
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/monitor.sh
+    sha256: 2285f534ba6760e45f0bc32e378be3b0fd7cc38ad53c2272c417e7c76eea5cdd
+    size: 34506
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/quality-gate.sh
+    sha256: c64057db91b400a661b2191ccdfa9f0f08922fa8f84f0e9463dca65ad91712b6
+    size: 1038
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/verify-completion.sh
+    sha256: c58d6a612432fc51fb7da28fcfd6ac539fcdd214e905f6762b97ba3d7faeac2c
+    size: 4568
+    kind: script
+    executable: true
+    script: true
+  - path: scripts/verify-scope.sh
+    sha256: 82845086a9d47f799db1ee32d00a3ea38b53cc1de9ca99bcc0d09bfb45e16927
+    size: 1233
+    kind: script
+    executable: true
+    script: true
