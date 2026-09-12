@@ -99,6 +99,22 @@ R2キーは2026-12-07に失効する。失効前に再発行し、ローカル `
 
 これで **D-1・D-2・D-3（H-14・H-06・H-13）の3つの判断がすべて決着**し、A. 即着手のブロッカーは解消した。
 
+## 2026-09-12 追記：M0-1（01-repo-bootstrap）実装・push 完了
+
+| 項目 | 結果 |
+|---|---|
+| monorepo 骨格 | 企画書21章の構成で `apps/{host,gateway}` ＋ `packages/` 7種 ＋ `e2e` ＋ `templates/` を生成。中身は空、依存の向きだけ固定 |
+| ツールチェーン | node 24.1.0 / pnpm 10.13.1（仕様どおり）。`@cloudflare/workers-types` は wrangler 4.131 の peer 要求に合わせ `^5` へ変更。esbuild・workerd のビルドを `pnpm.onlyBuiltDependencies` で明示許可 |
+| **依存の機械強制** | `infra/scripts/dep-graph.mjs` を正本にし、`pnpm lint` が **package.json と tsconfig references の両方**を照合。加えて oxlint で `cloudflare:workers` の直接 import を app-do 以外で禁止。**違反を仕込んで3種とも検出されることを実測** |
+| `pnpm check` | green（17タスク）。`appspec-schema` に実テスト2本 |
+| CI | `lint-typecheck-unit` が **success・27秒**（宣言した線 ≤5分に対して十分） |
+| main 保護 | 適用済み。必須チェックは `lint-typecheck-unit` のみ（`terraform-plan` は 02 の成果物。**存在しないチェック名を入れると永久 pending で PR がマージ不能になる**ため足していない） |
+| **⚠️ 直接 push** | `enforce_admins: false` のため**管理者は bypass できる**。実測で push は成功し、GitHub 側に `Bypassed rule violations` として記録された。DoD の読み替えが要る（`01-repo-bootstrap.md` §8.1） |
+| `.claude/` `.agents/` | CommandMate が配置するファイル。**追跡対象外にした**（判断保留。他リポジトリでも対応が割れている） |
+| 未実施 | `issues.md` の Issue 起票（39件）。`.github/workflows` の terraform-plan（02）、sync-bindings 検査（03） |
+
+初回 push で `main` が作成され、H-07 の残タスク（main 保護）も解消した。
+
 ## 残っている判断・本人操作
 
 1. ~~**H-14 アカウント構成**~~ → **2026-09-12 決定済み**（案A・上記）。残る本人操作は**アカウント②の新規作成**（メール認証）。
