@@ -1,0 +1,41 @@
+# .commandmate/verify.yaml — v1
+# 「このリポジトリで何が通れば合格か」の唯一の定義。
+# 次の経路がすべてこのファイルを読む。食い違わせないこと。
+#   - cmate-verify（ローカル）
+#   - commandmate verify <worktree-id>（サーバー）
+#   - commandmate wait <worktree-id> --verify（実行契約の裁定）
+#   - .github/workflows/ci.yml の lint-typecheck-unit ジョブ（**手で同期する**）
+#
+# ゲートは ci.yml の lint-typecheck-unit と同じ4段・同じ順序である。
+# 片方だけ直すと「ローカルは通るが CI で落ちる」が起きる。両方を同時に直すこと。
+#
+# lint に含まれるもの（package.json の scripts.lint）:
+#   1. turbo run lint      … oxlint。cloudflare:workers の直接 import を app-do 以外で禁止
+#   2. check-deps.mjs      … 依存の向きを infra/scripts/dep-graph.mjs と照合し、
+#                            package.json と tsconfig references の両方の一致を要求する
+#   中身が空の M0 でも 2 が効くので、コードを書く前から境界が守られる。
+#
+# 【M0-2 以降で足すもの】
+#   - terraform fmt -check / terraform validate（Issue #3）
+#   - pnpm infra:sync --env staging --check（Issue #5・#13）
+#   これらは対象ファイルがまだ無いので、今は入れていない。
+#   ゲートに入れた時点で ci.yml 側にも同じものを足すこと。
+version: 1
+gates:
+  - id: deps
+    command: "corepack enable >/dev/null 2>&1 || true; pnpm install --frozen-lockfile"
+    timeoutSec: 600
+  - id: lint
+    command: "pnpm lint"
+    timeoutSec: 300
+  - id: typecheck
+    command: "pnpm typecheck"
+    timeoutSec: 300
+  - id: unit
+    command: "pnpm test"
+    timeoutSec: 600
+options:
+  baseRef: origin/main
+  skipInPrimaryCheckout: true
+  maxLogTailBytes: 8192
+  requireCommit: true

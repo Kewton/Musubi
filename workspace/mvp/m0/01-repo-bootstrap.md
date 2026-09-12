@@ -63,9 +63,9 @@ pnpm -v            # 10.13.1
 
 # Terraform（tfenv でピン）
 brew install tfenv
-tfenv install 1.13.0    # ※着手時の最新安定版に読み替え、.terraform-version に固定
-tfenv use 1.13.0
-echo "1.13.0" > .terraform-version
+tfenv install 1.16.2    # 2026-09-12 着手時の最新安定版。SHA256 照合つきで導入される
+tfenv use 1.16.2
+echo "1.16.2" > .terraform-version   # ← このファイルがある限り tfenv が自動で切り替える
 ```
 
 > **wrangler はグローバルに入れない。** monorepo の devDependency として入れ、`pnpm exec wrangler` で叩く。CIとローカルでバージョンが割れるのを防ぐ（企画書11章「本番同一エンジン workerd で9割をローカル再現」の前提）。

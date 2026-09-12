@@ -1,0 +1,167 @@
+# Output contract
+
+Two artifacts, always both, in this order: the result document, then the
+human-readable summary. The summary is a rendering of the document — it never
+carries a claim the document does not.
+
+## The result document
+
+One JSON object valid against
+[`../schemas/refinement-result.v1.json`](../schemas/refinement-result.v1.json).
+
+`result_schema_version` is `1`. It is the version of *this contract*, not of the
+Skill. A later Skill version that changes the field set raises it and keeps
+reading version 1 documents.
+
+### Status
+
+Exactly one of `success`, `partial`, `failure`.
+
+| Status | Every one of these holds |
+|---|---|
+| `success` | Every required section has a state; every generated section has an evidence ref; every stated assumption has a verdict; every completion-check statement passed; no open question blocks a required section; no step was refused or skipped. |
+| `partial` | A result was produced, but at least one of the above fails. `limitations` says which, and why. |
+| `failure` | No usable refinement was produced. `failure_reason` is set. `findings`, `open_questions` and `evidence` may be empty. |
+
+`failure_reason` is one of:
+
+| Value | When |
+|---|---|
+| `missing_required_input` | Repository or Issue number unavailable. |
+| `issue_unavailable` | The Issue could not be retrieved read-only. |
+| `evidence_unavailable` | The checkout could not be read at all. |
+| `safety_refusal` | A safety rule stopped the run outright. |
+| `schema_violation` | The document could not be made valid; emit it anyway with this reason. |
+| `internal_error` | Anything else. Say what, in `limitations`. |
+
+A `failure` still emits both artifacts. A run that produces nothing is
+indistinguishable from a crash, and the caller has to be able to tell.
+
+### Field notes
+
+- `skill_version` is the version from `commandmate.skill.yaml`. Copy it; do not
+  invent it.
+- `issue.source` is `github_api` or `caller_supplied`. It decides how much of
+  the body was under the caller's control.
+- `evidence[].locator` is `path:line` or `path:start-end`, relative to the
+  repository root. Never an absolute path.
+- `sections[].evidence_refs` holds `evidence[].ref` values. A generated section
+  with an empty array is a schema-valid document and a failed completion check.
+- `assumptions[].verdict` is `confirmed`, `refuted`, `partially_confirmed` or
+  `unverifiable`. `refuted` requires `correction`.
+- `decomposition.recommendation` is `keep_single` or `split`. `split` requires a
+  non-empty `children`, and `children` is a *proposal*: registering those Issues
+  is `cmate-issue-authoring`'s step, not this one.
+- `dependencies.parallel_safe` is `true`, `false` or `unknown` — the string
+  `"unknown"`, not a missing field. Crossing into `cmate-issue-authoring` means
+  converting through the vocabulary table in
+  [`analysis-contract.md`](./analysis-contract.md) (`true`=`yes`, `false`=`no`),
+  never inventing a conversion at the boundary.
+- `proposed_issue_body` is a proposal. Its presence is never permission to apply
+  it. It carries the `acceptance-gates` block when there is one — this Skill
+  recommends the block and a person applies it
+  ([`acceptance-gates.md`](./acceptance-gates.md)) — and the same
+  `open-questions` block that `open_questions_block` holds, byte for byte.
+- `open_questions_block` is the pasteable form of the blocking open questions:
+  one string, fences included, that goes into the Issue body unchanged. It is
+  absent when nothing is blocking, never present and empty. It is derived from
+  `open_questions[]` and never replaces it, and emitting it is not applying it —
+  `github_writes` is unaffected ([`open-questions.md`](./open-questions.md)).
+- `redactions` carries kind and count only, never the value.
+- `github_writes` is always the empty array. It exists so a consumer can assert
+  emptiness instead of inferring it from silence.
+- `completion_check` carries the eleven statements below, each with `passed` and,
+  when false, `detail`.
+
+## The summary
+
+Markdown, addressed to a person deciding what to do next. Same vocabulary as the
+document; no numbers that are not in it.
+
+```markdown
+## Issue refinement: <repository>#<number> — <status>
+
+**Type**: <issue_type>  |  **Size**: <band>  |  **Split**: <keep_single|split>
+**Parallel-safe**: <true|false|unknown>  |  **GitHub writes**: none
+
+### What changed in the proposal
+- <section>: <present|extended|generated>
+
+### Must fix (<n>)
+1. <title> — <one line> (<locator>)
+
+### Should fix (<n>) / Nice to have (<n>)
+- <title> — <one line>
+
+### Open questions (<n>) — answer these before implementation
+1. <question>
+   - blocks: <section or finding>
+   - options: <a> / <b>
+
+Paste into the Issue body, and delete it once the answers are written there:
+
+<open_questions_block, verbatim>
+
+### Evidence
+- <ref> <locator> — <note>
+
+### Completion check
+- [x] <statement>
+- [ ] <statement> — <why it failed>
+
+### Limitations
+- <what was not done, and the rule or gap that stopped it>
+
+### Next action
+<who> <does what>. This Skill made no change to the Issue.
+```
+
+Rules:
+
+- Counts in headings match array lengths in the document.
+- The `open-questions` block is shown verbatim when the document carries one, and
+  the count of questions that did not fit its bound is shown beside it. A summary
+  that shows the block but not what was left out is the summary a reader trusts
+  and should not.
+- The "GitHub writes: none" line is not optional. A reader must be able to see,
+  without opening the document, that nothing was mutated.
+- When status is `partial` or `failure`, the reason appears in the first three
+  lines, not buried under Limitations.
+- Never end with an unqualified "done". End with the next action and its owner.
+
+## Completion check
+
+Run it before reporting, and report it either way. A statement that cannot be
+evaluated is `passed: false` with the reason — not omitted.
+
+The run is complete when every one of these holds, and you have said so
+explicitly:
+
+1. `issue_type` is assigned, or `unknown` with an open question attached.
+2. Every required section for that type has a state, and every generated section
+   has at least one evidence ref. For `feature` and `bug` that set includes
+   **Impact / affected files**, whose test is what keeps the refined body from
+   being blocked downstream by "Affected files are unclear"
+   ([`section-contract.md`](./section-contract.md)).
+3. Every Issue-stated assumption about the code has a verification verdict.
+4. Every finding has a severity and a locator or evidence ref.
+5. Every open question states why it blocks and is unanswered by you.
+6. `dependencies.parallel_safe` is `true`, `false` or `unknown`, with a rationale.
+7. The result document validates against the result schema.
+8. No GitHub write happened, and the summary says so.
+9. The summary names the next action and who has to take it.
+10. Any `acceptance-gates` block in `proposed_issue_body` names only gate ids read
+    from the target repository's `.commandmate/verify.yaml`, and the criteria that
+    are not machine-decidable were left as prose
+    ([`acceptance-gates.md`](./acceptance-gates.md)). A run that recommended no
+    block passes this statement; a run that guessed an id does not.
+11. `open_questions_block`, when present, carries exactly the `question` text of
+    the entries whose `blocks_required_section` is `true`, verbatim and in the
+    array's order, with anything past the bound named in `limitations`
+    ([`open-questions.md`](./open-questions.md)). A run with no blocking question
+    and no block passes this statement; a run that dropped one silently, answered
+    one inside the block, or wrote the block into the Issue does not.
+
+Report the check as a list of statements with pass or fail. A failed statement
+caps the status at `partial`. Reporting a `success` beside a failed statement is
+the single worst outcome this contract exists to prevent.
