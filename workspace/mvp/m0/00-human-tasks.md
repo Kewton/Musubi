@@ -12,7 +12,7 @@
 > | 済 | 内容 | 参照 |
 > |---|---|---|
 > | ✅ | H-07 のうち **squash-onlyマージ設定・Environments（staging / production＋必須レビュワー Kewton・`v*` タグポリシー）・Milestone M0〜M3・Label 5種** を適用済み。タグポリシーと Actions の read 権限は今回再確認 | [`00e-execution-status.md`](./00e-execution-status.md) |
-> | ⏳ | H-07 の **main ブランチ保護は未適用**（空リポジトリには掛けられない）。最初の push 直後に `scripts/protect-main.sh` を1回実行 | [`scripts/protect-main.sh`](./scripts/protect-main.sh) |
+> | ✅ | H-07 の **main ブランチ保護を適用済み**（2026-09-12・初回push直後）。必須チェックは `lint-typecheck-unit`。`terraform-plan` は 02 完了後に追加する | [`scripts/protect-main.sh`](./scripts/protect-main.sh) |
 > | ✅ | H-12 の「所在・アクセス権の確認」完了。`pins/commandagent.json` プレースホルダ作成済み | [`00c-h12-commandagent.md`](./00c-h12-commandagent.md) |
 > | ⚠️ | H-04 の候補 **`musubi.app` は既に登録済み**。主要TLDは軒並み埋まっている | [`00d-h04-domain.md`](./00d-h04-domain.md) |
 > | 🚨 | H-05 の予備調査を実施。**結果は要対応。名称の継続可否（N-1）と一体で判断する** | 非公開リポジトリ `Kewton/Musubi-workspace` の `legal/` |
@@ -406,7 +406,7 @@ M0でやることは「有効化」ではなく「**要らないことを確定�
 | H-04 | ドメイン取得＋ゾーン委任 | 部分（回避策あり） | 30分＋伝播待ち | ⚠️ [`00d`](./00d-h04-domain.md) 参照 |
 | H-05 | 商標クリアランス（9類・42類） | NO（M4まで）→ **要前倒し** | 発注15分＋調査数日〜 | **予備調査✅**（結果は非公開リポジトリ `Musubi-workspace` の `legal/`） |
 | H-06 | リポジトリ可視性の判断 | **YES**（push前） | 5分 | **✅ 決定・実行済**（2026-09-12。public維持＋`Musubi-workspace` へ分離） |
-| H-07 | main保護・Environments設定 | **YES**（CI前） | 15分（AI代行可） | **一部✅**（main保護のみ残） |
+| H-07 | main保護・Environments設定 | **YES**（CI前） | 15分（AI代行可） | **✅ 完了**（2026-09-12。初回push後にmain保護を適用。⚠️ 管理者bypass可は `01` §8.1） |
 | H-08 | Secrets/Variables 登録 | **YES**（CI前） | 15分 | **✅ 完了**（2026-09-12。Secrets 6/6・Variables 4/5。`CLOUDFLARE_ZONE_ID` は H-04 待ち） |
 | H-09 | ~~WfP有効化~~ → **M5〜M6へ延期**（M0は不要の確定のみ） | NO | 5分 | ☐ |
 | H-10 | LINE Developers dev チャネル | NO（M2まで） | 30分 | ☐ |

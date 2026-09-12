@@ -327,9 +327,36 @@ gh label create "blocked"       --color B60205 --repo $REPO
 
 ## 8. 完了条件（このステップのDoD）
 
-- [ ] `pnpm install && pnpm check` がローカルで green（空パッケージでも通る）
-- [ ] `main` が保護され、直接pushが拒否されることを実際に確認した
-- [ ] Milestone `M0`〜`M3` が存在し、`issues.md` のIssueが `M0` に紐づいて起票済み
-- [ ] Issue/PR テンプレートが動作する（新規Issue画面で選択肢が出る）
-- [ ] `CLAUDE.md` がコミット済み
-- [ ] 🧑 H-06 の可視性判断が反映済み
+- [x] `pnpm install && pnpm check` がローカルで green（空パッケージでも通る）— 2026-09-12
+- [x] `main` が保護された — 2026-09-12。**ただし直接pushは拒否されなかった**（下記 §8.1）
+- [ ] Milestone `M0`〜`M3` が存在し、`issues.md` のIssueが `M0` に紐づいて起票済み — Milestone は作成済み、**起票は未**
+- [x] Issue/PR テンプレートがコミット済み（`.github/ISSUE_TEMPLATE/` ＋ `pull_request_template.md`）
+- [x] `CLAUDE.md` がコミット済み
+- [x] 🧑 H-06 の可視性判断が反映済み（public 維持＋非公開文書を別リポジトリへ）
+
+### 8.1 ⚠️ 「直接pushが拒否される」は現状では成立しない
+
+保護を適用したうえで `git push origin main` を実行した実測結果（2026-09-12）：
+
+```
+remote: Bypassed rule violations for refs/heads/main:
+remote: - Changes must be made through a pull request.
+remote: - Required status check "lint-typecheck-unit" is expected.
+   9085d9b..09aa099  main -> main      ← push は成功している
+```
+
+**原因は `enforce_admins: false`。** §5 で「緊急時のhotfix経路を残す」ために意図的にそう設定した。
+リポジトリ管理者は1人（Kewton）であり、その1人が唯一の開発者なので、**実質的に保護は honor system になる。**
+
+ただし **GitHub は bypass を記録する**（上記の `Bypassed rule violations`）。
+§5 の「使ったら必ずIssueに理由を残す」運用は、この記録を根拠に成立する。
+
+**選べる出口は2つ。**
+
+| | 内容 | 代償 |
+|---|---|---|
+| **A（現状）** | `enforce_admins: false` のまま。bypass は記録に残す | PR必須は自己規律。うっかり直接pushできてしまう |
+| B | `enforce_admins: true` にする | 自分も必ずPRを経由する。緊急時は保護を一時的に外す操作が要る |
+
+**DoD の文言はこの事実に合わせて読み替えること**：「直接pushが拒否される」ではなく
+「**直接pushが bypass として記録される**」が、A における正しい完了条件である。
