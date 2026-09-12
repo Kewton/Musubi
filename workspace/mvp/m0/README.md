@@ -13,11 +13,12 @@
 | `README.md`（本書） | M0全体像・DoD対応表・依存関係・スケジュール | — |
 | [`00-human-tasks.md`](./00-human-tasks.md) | **初期設定・判断タスク**（先行必須。実測状況は [`00e`](./00e-execution-status.md)） | **AI代行＋本人の判断・認証** |
 | [`01-repo-bootstrap.md`](./01-repo-bootstrap.md) | monorepo骨格・GitHub Flow・Issueドリブン | AI＋一部人間 |
-| [`02-terraform.md`](./02-terraform.md) | Terraform（アカウント単位資源）／**最初のIssue #1** | AI |
+| [`02-terraform.md`](./02-terraform.md) | Terraform（アカウント単位資源）／**最初のIssue [#2](https://github.com/Kewton/Musubi/issues/2)** | AI |
 | [`03-workers-and-bindings.md`](./03-workers-and-bindings.md) | wrangler.jsonc・host/gateway/data-api・Service Bindings・貫通スモーク | AI |
 | [`04-cicd.md`](./04-cicd.md) | GitHub Actions（PR検査／staging自動／tag→prod／ロールバック） | AI＋一部人間 |
 | [`05-acceptance.md`](./05-acceptance.md) | M0受入試験（DoD判定手順） | AI＋人間承認 |
 | [`06-plan-and-limits.md`](./06-plan-and-limits.md) | **課金プラン・無償枠・昇格トリガーの正本（M0は $0）** | AI＋人間承認 |
+| [`07-parallel-plan.md`](./07-parallel-plan.md) | **Issue #2〜#28 の並列実行計画**（レーン・波・ファイル衝突・クリティカルパス） | AI（別エージェントへの引き継ぎ用） |
 | [`issues.md`](./issues.md) | 起票するIssue一覧（Milestone `M0`・依存順） | AI（起票代行可） |
 | [`checklist.md`](./checklist.md) | 一枚もの進捗チェックリスト | 共用 |
 
