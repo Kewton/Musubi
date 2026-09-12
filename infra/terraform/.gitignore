@@ -1,0 +1,12 @@
+# アカウント ID は public リポジトリに入れない（04 §3.1）。
+# 値は TF_VAR_account_id / AWS_ENDPOINT_URL_S3 で渡す。うっかり tfvars に
+# 書いても commit されないようにしておく。
+*.tfvars
+*.tfvars.json
+backend.hcl
+
+# plan ファイルは属性値（account_id を含む）をそのまま持つ。
+# 手順書の例が -out=tfplan（拡張子なし）なので、ルートの *.tfplan では拾えない。
+tfplan
+tfplan.*
+*.tfplan
