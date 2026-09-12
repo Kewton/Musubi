@@ -1,0 +1,27 @@
+name: バグ
+description: 想定と異なる挙動
+labels: ["bug"]
+body:
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した挙動
+    validations: { required: true }
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の挙動
+      description: エラー文は原文のまま貼る。要約しない
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: 再現手順
+    validations: { required: true }
+  - type: dropdown
+    id: env
+    attributes:
+      label: 影響環境
+      multiple: true
+      options: [local, dev, staging, production]
+    validations: { required: true }

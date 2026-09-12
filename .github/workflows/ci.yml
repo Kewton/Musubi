@@ -1,0 +1,37 @@
+name: ci
+on:
+  pull_request:
+  push: { branches: [main] }
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# 既定は read のみ。必要なジョブだけが昇格する（H-07 の方針）。
+permissions:
+  contents: read
+
+jobs:
+  lint-typecheck-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .node-version, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      # TODO(M0-3 / 03-workers-and-bindings.md): wrangler.jsonc が terraform output と
+      # 乖離していないかの検査を足す（pnpm infra:sync --env staging --check）。
+      # sync-bindings.ts は 03 の成果物なので、M0-1 の時点ではまだ無い。
+
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env: { GITHUB_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }

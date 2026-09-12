@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "categories": { "correctness": "error", "suspicious": "warn" },
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["cloudflare:workers"],
+            "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
+          }
+        ]
+      }
+    ]
+  },
+  "ignorePatterns": ["**/dist/**", "**/.wrangler/**", "**/node_modules/**"],
+  "overrides": [
+    {
+      "files": ["packages/app-do/**"],
+      "rules": { "no-restricted-imports": "off" }
+    }
+  ]
+}

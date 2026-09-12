@@ -1,0 +1,20 @@
+{
+  "$comment": "M0 ではプレースホルダ。実値の確定は M1（H-12）。企画書21章の境界規律により、Musubi は CommandAgent リポジトリを直接参照しない。ここに書いた固定値だけを正とする。",
+  "source": {
+    "repo": "github.com/Kewton/CommandAgent",
+    "note": "参照は人手での取得のみ。ビルド時にネットワーク越しで解決しない"
+  },
+  "appspec_schema": {
+    "version": null,
+    "sha256": null
+  },
+  "template_tarball": {
+    "url": null,
+    "sha256": null
+  },
+  "headless_contract": {
+    "version": null
+  },
+  "pinned_at": null,
+  "pinned_by": null
+}

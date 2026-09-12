@@ -1,0 +1,36 @@
+{
+  "name": "musubi",
+  "private": true,
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "lint": "turbo run lint && node infra/scripts/check-deps.mjs",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "build": "turbo run build",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "infra:sync": "tsx infra/scripts/sync-bindings.ts",
+    "deploy:dev": "turbo run deploy --filter=./apps/* --filter=./packages/data-api -- --env dev",
+    "deploy:staging": "turbo run deploy --filter=./apps/* --filter=./packages/data-api -- --env staging",
+    "deploy:production": "turbo run deploy --filter=./apps/* --filter=./packages/data-api -- --env production",
+    "smoke": "tsx infra/scripts/smoke.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5",
+    "oxlint": "^1",
+    "prettier": "^3",
+    "tsx": "^4",
+    "turbo": "^2",
+    "typescript": "^5.7",
+    "vitest": "^3",
+    "wrangler": "^4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "workerd"
+    ]
+  }
+}

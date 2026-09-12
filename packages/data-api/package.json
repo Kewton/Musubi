@@ -1,0 +1,27 @@
+{
+  "name": "@musubi/data-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "★唯一の権限強制点（Worker）。外部ルートを持たない",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty",
+    "lint": "oxlint src",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@musubi/appspec-schema": "workspace:*",
+    "@musubi/sdk": "workspace:*",
+    "@musubi/spec-engine": "workspace:*",
+    "@musubi/app-do": "workspace:*"
+  }
+}

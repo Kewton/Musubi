@@ -1,0 +1,47 @@
+name: タスク
+description: Milestone・DoD・担当区分を必ず埋める作業Issue
+labels: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **曖昧なIssueを起票しない。** DoD が書けないものは、まだタスクになっていない。
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone
+      description: M0〜M7 のどれか。全IssueをMilestoneに紐付ける（企画書21章）
+      placeholder: M0
+    validations: { required: true }
+  - type: dropdown
+    id: assignee_kind
+    attributes:
+      label: 担当区分
+      description: 人間待ちのタスクが埋もれるのを防ぐ
+      options:
+        - "🤖 AIが実行する"
+        - "🧑🤖 AIが用意し、人間が承認・実行する"
+        - "🧑 人間にしかできない（本人確認・支払い・事業判断）"
+    validations: { required: true }
+  - type: textarea
+    id: dod
+    attributes:
+      label: DoD（完了条件）
+      description: 「何が観測できたら完了か」を書く。実行した結果で判定できる形にする
+      placeholder: |
+        - [ ] xxx が green
+        - [ ] yyy を実測し記録した
+    validations: { required: true }
+  - type: textarea
+    id: context
+    attributes:
+      label: 背景・参照
+      description: 対応する手順書のセクション（例：`workspace/mvp/m0/02-terraform.md` §3）
+    validations: { required: false }
+  - type: input
+    id: depends_on
+    attributes:
+      label: 依存Issue
+      description: クリティカルパスを可視化する。無ければ空欄
+      placeholder: "#12, #15"
+    validations: { required: false }

@@ -1,0 +1,34 @@
+# Local credentials and agent session data
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+.commandcode/
+.DS_Store
+
+# Terraform state and credentials; keep .terraform.lock.hcl tracked
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.state-backups/
+
+# Build artifacts / toolchain
+node_modules/
+.turbo/
+dist/
+.output/
+.wrangler/
+*.tsbuildinfo
+
+# 非公開リポジトリ Kewton/Musubi-workspace へ分離した文書（→ workspace/mvp/m0/00b-decisions.md D-2）
+# 再び置かれても公開リポジトリへ入らないようにする
+workspace/proposal/
+workspace/legal/
+workspace/naming/
+
+# CommandMate が登録時に配置するスキーマ・スキル（ツール側で再生成される）
+# 追跡したくなったらこの3行を消す。判断は保留（他リポジトリでも対応が割れている）
+.claude/
+.agents/
