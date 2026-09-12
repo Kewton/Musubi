@@ -28,7 +28,8 @@ workspace/proposal/
 workspace/legal/
 workspace/naming/
 
-# CommandMate が登録時に配置するスキーマ・スキル（ツール側で再生成される）
-# 追跡したくなったらこの3行を消す。判断は保留（他リポジトリでも対応が割れている）
-.claude/
-.agents/
+# CommandMate のスキル（.claude/skills, .agents/skills）は **追跡する**。
+# git worktree で並列開発するとき、worktree には tracked なファイルしか複製されない。
+# ignore するとワークツリー側でスキルが見つからず、cmate-* の手順が使えなくなる。
+# 機械ごとに変わるローカル設定だけを除外する。
+.claude/settings.local.json
