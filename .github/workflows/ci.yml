@@ -34,8 +34,20 @@ jobs:
       - run: pnpm typecheck
       # verify-gate: unit
       - run: pnpm test
+      # setup-terraform には terraform_version_file という入力が無く、書いても無視されて最新版が入る。
+      # だから .terraform-version を読んで terraform_version に渡す。目印はステップ直前の1行だけに効く。
+      # verify-setup: .terraform-version を読んで setup-terraform に渡す（ゲートではない）
+      - id: tfver
+        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false
+      # verify-gate: tf-fmt
+      - run: pnpm check:tf-fmt
+      # verify-gate: tf-validate
+      - run: pnpm check:tf-validate
       # 【追加予定のゲート】対象ファイルが揃った時点で、人が verify.yaml と同時に足す：
-      #   terraform fmt -check / terraform validate（Issue #3 完了後）
       #   pnpm infra:sync --env staging --check  （Issue #13）
 
   pr-title:

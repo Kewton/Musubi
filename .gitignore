@@ -9,6 +9,8 @@
 
 # Terraform state and credentials; keep .terraform.lock.hcl tracked
 .terraform/
+# 検証ゲート（.commandmate/scripts/check-terraform.sh）が init -backend=false で使う作業領域
+.terraform-validate/
 *.tfstate
 *.tfstate.*
 *.tfplan
