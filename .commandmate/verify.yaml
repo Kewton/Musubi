@@ -29,8 +29,12 @@
 #   .commandmate/scripts/check-terraform.sh を呼ぶ。資格情報を一切使わない（init -backend=false）。
 #   入っている terraform が .terraform-version と一致しなければ落ちる。ローカルは tfenv が要る。
 #
-# 【追加予定のゲート】対象ファイルが揃った時点で、人が ci.yml と同時に足す：
-#   - pnpm infra:sync --env staging --check  （Issue #13）
+# ── infra:sync --check を検証ゲートに入れない理由（2026-09-13 決定：(c) の変形）──
+# wrangler.jsonc と Terraform の実物の乖離は、apply（D1 は作り直すと ID が変わる）と手修正でしか生まれない。
+# 乖離チェックは「生まれる瞬間」と「害が出る瞬間」に置く：
+#   - apply の直後 … `pnpm infra:sync --env <env>` で書き戻してコミットする（infra/terraform/README.md §2）
+#   - デプロイの直前 … deploy-staging / deploy-production で `--check` を回す（04 §4・§5）
+# ここに入れると、ワーカーのローカル検証が本物の state に触れ、同期先と state が揃うまで全 PR が落ちる。
 version: 1
 gates:
   - id: deps

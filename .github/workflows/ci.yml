@@ -47,8 +47,8 @@ jobs:
       - run: pnpm check:tf-fmt
       # verify-gate: tf-validate
       - run: pnpm check:tf-validate
-      # 【追加予定のゲート】対象ファイルが揃った時点で、人が verify.yaml と同時に足す：
-      #   pnpm infra:sync --env staging --check  （Issue #13）
+      # infra:sync --check はここに入れない（2026-09-13 決定）。乖離チェックは apply 直後の同期コミットと、
+      # deploy-staging / deploy-production のデプロイ直前に置く（04 §4・§5、.commandmate/verify.yaml 冒頭）。
 
   pr-title:
     if: github.event_name == 'pull_request'

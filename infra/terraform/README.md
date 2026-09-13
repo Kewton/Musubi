@@ -56,6 +56,19 @@ terraform apply tfplan
 terraform output -json bindings    # ← infra:sync（Issue #5）が食う形
 ```
 
+**apply したら、その場で wrangler.jsonc へ書き戻してコミットする**（2026-09-13 決定・`03` §3）。
+これを怠ると、次のデプロイ直前の乖離チェック（`04` §4・§5）でデプロイが止まる。
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+pnpm infra:sync --env <env>           # Terraform 由来の欄だけを書き戻す（冪等。値はログに出ない）
+pnpm infra:sync --env <env> --check   # exit 0 を確かめる
+git add apps/*/wrangler.jsonc packages/data-api/wrangler.jsonc
+git commit -m "chore: <env> の apply 後に wrangler.jsonc を terraform output へ同期"
+```
+
+> D1 は作り直すと `database_id` が変わる（§4）。**dev の destroy → apply のたびにも同じ手順が要る。**
+
 **staging / production も同じ手順で、違うのは次の行だけ。** backend（state）は3環境ともアカウント①なので、
 `AWS_*` の3行は変えない。apply は Issue #4（production は 🧑 承認必須）。
 

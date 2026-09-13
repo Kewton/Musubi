@@ -160,6 +160,26 @@ BorderFreeKidsMap の同名スクリプトに1点足した：**目印の無い `
 CI で `terraform init` するには環境変数 **`AWS_ENDPOINT_URL_S3`** が要るが、GitHub Variable の名前は
 **`R2_S3_ENDPOINT`**。ワークフローで対応付けること（`infra/terraform/README.md` §3）。
 
+## 2026-09-13 追記：#5 完了と、乖離チェックの置き場の決定
+
+### #5 の確認
+- テスト56本がすべて通過し、DoD の各項目（書き戻し・冪等・コメントと書式の保持・CRLF・`--check` がファイルを書かない・Account ID を書かない・terraform の stderr を出さない）を個別に検査している
+- ルートの `lint` / `typecheck` / `test` を `infra/scripts` まで広げた。**改善**：`infra/scripts` は pnpm workspace の外で、これまで `check-deps.mjs` を含めて素通りしていた
+  - **注意**：ゲートの中身は `package.json` の `scripts` が決め、ワーカーが編集できる。同じ仕組みで狭めることもでき、verify-parity は気づかない。**レビューで `scripts.lint` / `typecheck` / `test` の差分を見る**
+
+### エージェントの前提で違っていた2点（実測）
+1. **`terraform output` に Cloudflare のトークンは要らない。** R2 の資格情報3つだけで読める（CF 系の環境変数0個で `init` → `infra:sync --check` まで通過）
+2. **どの案でも今は検証ゲートに入れられない。** `--check` は `同期先が無い: apps/gateway, apps/host, packages/data-api` で exit 2。入れると全 PR が落ちる
+
+### 決定：(c) の変形
+乖離チェックを PR の検証ゲートに入れず、**apply 直後の同期コミット**（`infra/terraform/README.md` §2）と**デプロイ直前の `--check`**（`04` §4・§5）に置く。理由は `03` §3。
+
+(b)（スナップショットを渡す）は、apply で ID が変わった瞬間に古くなり**乖離しているのに通る**ため採らなかった。
+
+### 試験で見つかった性質
+**`--check` は binding の欠落を検出しない。** binding を1つも書いていない wrangler.jsonc でも「一致」で exit 0 になる（gateway のような Worker を正当に扱う仕様）。
+data-api が D1 / R2 / Queue を書き忘れても通るので、**#6・#8・#9 の本文に契約として明記した**。
+
 ## 残っている判断・本人操作
 
 1. ~~**H-14 アカウント構成**~~ → **2026-09-12 決定済み**（案A・上記）。残る本人操作は**アカウント②の新規作成**（メール認証）。
