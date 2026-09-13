@@ -4,19 +4,20 @@
   "private": true,
   "type": "module",
   "description": "★唯一の権限強制点（Worker）。外部ルートを持たない",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/contract.js",
+  "types": "./dist/contract.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
     }
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty",
     "lint": "oxlint src",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@musubi/appspec-schema": "workspace:*",

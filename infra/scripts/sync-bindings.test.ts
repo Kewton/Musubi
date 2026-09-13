@@ -325,6 +325,30 @@ describe("syncBindings", () => {
   });
 });
 
+describe("packages/data-api/wrangler.jsonc（実物）", () => {
+  // `--check` は binding の欠落を検出しない（gateway / host を正当に扱うための仕様）。
+  // data-api が CONTROL_DB / BUNDLES / UPLOADS を書き忘れても infra:sync は黙って通るので、
+  // 実物に fixture の bindings を当て、欄が全部書き換わること＝全部そこにあることをここで落とす（Issue #6）。
+  const text = readFileSync(fileURLToPath(new URL("../../packages/data-api/wrangler.jsonc", import.meta.url)), "utf8");
+
+  it.each(["dev", "staging", "production"] as const)("env.%s に Terraform 由来の binding が全部あり、同期できる", (env) => {
+    const result = syncBindings({ ...STAGING, env }, text, { env });
+    expect(result.updated).toEqual(
+      expect.arrayContaining([
+        `env.${env}.d1_databases[CONTROL_DB].database_id`,
+        `env.${env}.d1_databases[CONTROL_DB].database_name`,
+        `env.${env}.r2_buckets[BUNDLES].bucket_name`,
+        `env.${env}.r2_buckets[UPLOADS].bucket_name`,
+      ]),
+    );
+    // 書き換えたのはその env のブロックだけ。account_id はどこにも書かない。
+    expect(result.text).not.toContain(STAGING.account_id);
+    for (const other of ["dev", "staging", "production"].filter((e) => e !== env)) {
+      expect(parse(result.text).env[other]).toEqual(parse(text).env[other]);
+    }
+  });
+});
+
 describe("runCli", () => {
   let root: string;
   let out: string[];
