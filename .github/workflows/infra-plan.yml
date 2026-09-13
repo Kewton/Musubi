@@ -1,0 +1,187 @@
+name: infra-plan
+# PR ごとに terraform plan を回し、「何が変わるか」だけを PR コメントに貼る（04 §3 / §3.1）。
+# apply は CI から実行しない。
+#
+# ── 必須チェック名は `terraform-plan`（最後のジョブ）──────────────────────
+# ★ paths で起動を絞らない（04 §3 訂正3）。必須チェックは「常に結果を返す」必要がある。
+#   変更の有無は changes ジョブが見て、変更が無ければ plan を飛ばし、terraform-plan は success で終わる。
+# ★ matrix ジョブ（plan）を必須チェックにしないこと。matrix のチェック名は `plan (dev)` のように
+#   値が付くので、`terraform-plan` という名前は報告されず、必須にすると永久に「待機中」になる。
+#   だから matrix の結果を1つに畳む集約ジョブを置き、そのジョブ名を terraform-plan にしている。
+#
+# ── fork からの PR ──────────────────────────────────────────────────
+# secrets が渡らないので plan は必ず落ちる。**pull_request_target で回避しないこと**
+# （公開リポジトリの典型的な権限昇格経路。04 §3）。
+on:
+  pull_request:
+
+concurrency:
+  group: infra-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# 既定は read のみ。PR コメントを書く plan ジョブだけが昇格する（H-07 の方針）。
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tf: ${{ steps.diff.outputs.tf }}
+    steps:
+      # pull_request の checkout は merge commit（第1親 = base の先端）。深さ2で PR の差分が取れる
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 2 }
+      # 判定できないときは（空扱いで plan を飛ばすのではなく）ジョブごと落とし、terraform-plan も落とす
+      - id: diff
+        run: |
+          if ! git rev-parse --verify --quiet 'HEAD^2' > /dev/null; then
+            echo "::error::HEAD が merge commit ではないので、PR の差分を判定できない"
+            exit 1
+          fi
+          changed="$(git diff --name-only HEAD^1 HEAD -- infra/terraform .terraform-version)"
+          if [ -n "$changed" ]; then
+            printf '%s\n' "$changed"
+            echo "tf=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "infra/terraform と .terraform-version に変更なし。plan は走らせない"
+            echo "tf=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  plan:
+    name: plan (${{ matrix.env }})
+    needs: changes
+    if: needs.changes.outputs.tf == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: { contents: read, pull-requests: write }
+    strategy:
+      fail-fast: false
+      matrix:
+        # ★ 環境ごとに資格情報の名前を切り替える（04 §3 訂正5）。account_var は Terraform 側の変数名。
+        #
+        # production の行は入れていない。**PR の plan に production のトークンを渡してよいかは 🧑 が決める**
+        # （04 §3 末尾の (a)/(b)/(c)。Issue #14）。(a) に決まったら次の1行を足す：
+        #   - { env: production, token: TF_CLOUDFLARE_API_TOKEN_PROD, account: CLOUDFLARE_ACCOUNT_ID_PROD, account_var: account_id_prod }
+        # production だけ変数名が account_id_prod なので、account_var を落とすと
+        # `No value for required variable` で止まる（envs/production/variables.tf、README §2）。
+        include:
+          - { env: dev, token: TF_CLOUDFLARE_API_TOKEN, account: CLOUDFLARE_ACCOUNT_ID, account_var: account_id }
+          - { env: staging, token: TF_CLOUDFLARE_API_TOKEN, account: CLOUDFLARE_ACCOUNT_ID, account_var: account_id }
+    steps:
+      - uses: actions/checkout@v4
+
+      # ★ setup-terraform に terraform_version_file という入力は無い（04 §3 訂正1）。読んで渡す
+      - id: tfver
+        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false # wrapper は出力と exit code を包むので切る
+
+      # ── 資格情報はこのステップにだけ渡す ──────────────────────────────
+      # ⚠️ vars.* はマスクされず、ステップの env としてログに平文で出る（04 §3.1）。
+      #   CLOUDFLARE_ACCOUNT_ID* と R2_S3_ENDPOINT（URL にアカウント ID を含む）を Secrets へ移したら、
+      #   下の vars[matrix.account] / vars.R2_S3_ENDPOINT を secrets. に書き換える（04 §3.1 の 5）。
+      #   ジョブ単位の env にしないのは、変更の無い PR や他のステップのログに出さないため。
+      # plan は -lock=false。読み取りしかしないうえ、concurrency で取り消されると R2 に
+      # ロックが残り、次の apply を force-unlock するまで止めてしまうため。
+      - id: plan
+        name: terraform init / plan (${{ matrix.env }})
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets[matrix.token] }}
+          ACCOUNT_ID: ${{ vars[matrix.account] }}
+          ACCOUNT_VAR: ${{ matrix.account_var }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }} # backend は3環境とも常にアカウント①の R2
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL_S3: ${{ vars.R2_S3_ENDPOINT }} # ★ 04 §3 訂正4（infra/terraform/README.md §3）
+          TF_DIR: infra/terraform/envs/${{ matrix.env }}
+          CHECKPOINT_DISABLE: '1'
+        run: |
+          # 値は出さない。空かどうかだけを見る（fork PR・Dependabot には secrets が渡らない）
+          for name in CLOUDFLARE_API_TOKEN ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_ENDPOINT_URL_S3; do
+            if [ -z "${!name}" ]; then
+              echo "::error::${name} が空。fork からの PR か、Secret / Variable が未登録"
+              exit 1
+            fi
+          done
+          export "TF_VAR_${ACCOUNT_VAR}=${ACCOUNT_ID}"
+          terraform -chdir="$TF_DIR" init -input=false -lockfile=readonly
+          # ★ plan の全文をログへ出さない（04 §3.1 の 2）。中身は手元で terraform show tfplan
+          terraform -chdir="$TF_DIR" plan -input=false -no-color -lock=false -out=tfplan > /dev/null
+
+      # ★ PR コメントは Plan 行とリソースアドレスだけ。属性値は貼らない（04 §3.1 の 3）
+      #   `  # ` はインデント2の行（リソースの見出し）だけに一致する。属性は6以上なので拾わない。
+      #   `  # (because ...)` のような理由行は拾わない。
+      #   plan が失敗しても前回の成功コメントが残って誤読されないよう、失敗も同じコメントに上書きする。
+      - name: PR コメント (${{ matrix.env }})
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+          ENV_NAME: ${{ matrix.env }}
+          TF_DIR: infra/terraform/envs/${{ matrix.env }}
+          CHECKPOINT_DISABLE: '1'
+        run: |
+          marker="<!-- infra-plan:${ENV_NAME} -->"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          {
+            echo "$marker"
+            echo "### terraform plan: \`${ENV_NAME}\`"
+            echo
+            echo "commit \`${HEAD_SHA:0:7}\` ・ [run](${run_url})"
+            echo
+            if [ "$PLAN_OUTCOME" = success ]; then
+              terraform -chdir="$TF_DIR" show -no-color tfplan > "$RUNNER_TEMP/plan.txt"
+              echo '```'
+              grep -E '^(Plan: |No changes\.|  # [^(])' "$RUNNER_TEMP/plan.txt" || echo "（Plan 行もリソースアドレスも無い。出力値だけの変更の可能性）"
+              echo '```'
+              echo
+              echo "差分の中身は手元で \`terraform show tfplan\` を開く（公開リポジトリなので属性値は貼らない）。"
+            else
+              echo "❌ plan が成功しなかった（outcome: \`${PLAN_OUTCOME:-not run}\`）。原因は run のログを見る。"
+            fi
+          } > "$RUNNER_TEMP/plan-comment.md"
+          rm -f "$RUNNER_TEMP/plan.txt"
+
+          id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"${marker}\"))) | .id" \
+            | sed -n '1p')"
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${id}" -F "body=@$RUNNER_TEMP/plan-comment.md" > /dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/comments" -F "body=@$RUNNER_TEMP/plan-comment.md" > /dev/null
+          fi
+
+  # 必須チェックに登録する名前（04 §1）。matrix の結果をここで1つに畳む。
+  # ★ always() であって !cancelled() ではない。取り消し時にこのジョブが skipped になると、
+  #   GitHub は skipped の必須チェックを「通過」と扱うため、plan を経ずにマージできてしまう。
+  terraform-plan:
+    needs: [changes, plan]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          TF: ${{ needs.changes.outputs.tf }}
+          PLAN: ${{ needs.plan.result }}
+        run: |
+          echo "changes=${CHANGES} tf=${TF} plan=${PLAN}"
+          if [ "$CHANGES" != success ]; then
+            echo "::error::変更の検出が ${CHANGES} で終わった"
+            exit 1
+          fi
+          if [ "$TF" = true ]; then
+            if [ "$PLAN" != success ]; then
+              echo "::error::terraform plan が ${PLAN} で終わった"
+              exit 1
+            fi
+            echo "全環境の plan が success"
+          else
+            echo "Terraform に変更なし（no-op）"
+          fi
