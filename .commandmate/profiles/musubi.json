@@ -14,8 +14,7 @@
     "derive": [],
     "require": [
       { "when": "infra/scripts/dep-graph.mjs", "add": ["CLAUDE.md"] },
-      { "when": ".commandmate/verify.yaml", "add": [".github/workflows/ci.yml"] },
-      { "when": ".github/workflows/ci.yml", "add": [".commandmate/verify.yaml"] }
+      { "when": ".commandmate/verify.yaml", "add": [".github/workflows/ci.yml"] }
     ]
   },
   "dispatch_defaults": {

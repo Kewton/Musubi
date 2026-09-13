@@ -20,13 +20,23 @@ jobs:
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with: { node-version-file: .node-version, cache: pnpm }
+      # ── ここから下の run ステップは .commandmate/verify.yaml の gates と1対1で対応する ──
+      # 各ステップの直前の `# verify-gate: <id>` を .commandmate/scripts/check-verify-parity.mjs が
+      # verify.yaml の gate id と順序まで照合する。目印の無い run ステップを足すと落ちる。
+      # ゲートの追加・削除は人（監督側）が verify.yaml と同時に行う（CLAUDE.md）。
+      # verify-gate: deps
       - run: pnpm install --frozen-lockfile
+      # verify-gate: verify-parity
+      - run: pnpm check:verify-parity
+      # verify-gate: lint
       - run: pnpm lint
+      # verify-gate: typecheck
       - run: pnpm typecheck
+      # verify-gate: unit
       - run: pnpm test
-      # TODO(M0-3 / 03-workers-and-bindings.md): wrangler.jsonc が terraform output と
-      # 乖離していないかの検査を足す（pnpm infra:sync --env staging --check）。
-      # sync-bindings.ts は 03 の成果物なので、M0-1 の時点ではまだ無い。
+      # 【追加予定のゲート】対象ファイルが揃った時点で、人が verify.yaml と同時に足す：
+      #   terraform fmt -check / terraform validate（Issue #3 完了後）
+      #   pnpm infra:sync --env staging --check  （Issue #13）
 
   pr-title:
     if: github.event_name == 'pull_request'
