@@ -1,0 +1,75 @@
+{
+  // ★唯一の権限強制点（CLAUDE.md 不変条件）。**外部ルートを持たない。**
+  //   到達経路は gateway からの Service Binding（DATA_API）だけである（03 §1）。
+  //   packages/ に置いてあるのも同じ規律の表現（apps/* だけがインターネットから届く）。
+  //
+  // ── infra:sync の同期先である（正本：infra/scripts/sync-bindings.ts 冒頭）──────────
+  //   - env.dev / env.staging / env.production の3ブロックを必ず置く。deploy は必ず --env を付ける
+  //   - Terraform 由来の欄（database_id / database_name / bucket_name）は infra:sync が書き戻す。手で直さない
+  //     名前は "musubi-<env>-*" で決まるので最初から実名を書き、D1 の ID だけ仮の値にしてある
+  //   - binding 名（CONTROL_DB / BUNDLES / UPLOADS）で要素を特定する。**改名すると同期されない**
+  //   - kv_namespaces / queues.consumers を書かない。Account ID を書かない（public リポジトリ）
+  //   - `--check` は binding の欠落を検出しない。欠落は infra/scripts/sync-bindings.test.ts が落とす
+  //
+  // ⚠️ bindings（d1_databases / r2_buckets / durable_objects / vars）は env へ継承されない。
+  //   だから3環境に丸ごと書く。トップレベルに置かないのは、置くと env 側との食い違いが生まれるだけで、
+  //   --env を付けない配備はそもそも行わないため。
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "musubi-dev-data-api",
+  "main": "src/index.ts",
+
+  // 着手時（2026-09-13）に固定する。app-do と揃える（同梱 workerd 1.20260911.1 が受け付ける最大値）。
+  "compatibility_date": "2026-09-11",
+  "observability": { "enabled": true },
+
+  // ── 外部ルートを持たない（以下3つは env へ継承される。src/index.test.ts が env ごとに確かめる）──
+  //   workers_dev  … <name>.<subdomain>.workers.dev を作らない
+  //   preview_urls … <version>-<name>.<subdomain>.workers.dev を作らない
+  //   routes/route … 書かない。ゾーンのパスに結び付けない
+  "workers_dev": false,
+  "preview_urls": false,
+
+  // DO の migration は env ではなくトップレベルに置く（継承される欄）。
+  // ★正本は packages/app-do/wrangler.jsonc。形をそのまま写す（src/index.test.ts が一致を確かめる）。
+  //   new_classes（KV バックエンド）ではなく new_sqlite_classes。Free では KV 型 DO は使えない（03 §4）。
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppInstanceDO"] }],
+
+  "env": {
+    "dev": {
+      "name": "musubi-dev-data-api",
+      "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local" },
+      "d1_databases": [
+        { "binding": "CONTROL_DB", "database_name": "musubi-dev-control", "database_id": "<TF_OUTPUT>" }
+      ],
+      "r2_buckets": [
+        { "binding": "BUNDLES", "bucket_name": "musubi-dev-bundles" },
+        { "binding": "UPLOADS", "bucket_name": "musubi-dev-uploads" }
+      ],
+      "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
+    },
+    "staging": {
+      "name": "musubi-staging-data-api",
+      "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local" },
+      "d1_databases": [
+        { "binding": "CONTROL_DB", "database_name": "musubi-staging-control", "database_id": "<TF_OUTPUT>" }
+      ],
+      "r2_buckets": [
+        { "binding": "BUNDLES", "bucket_name": "musubi-staging-bundles" },
+        { "binding": "UPLOADS", "bucket_name": "musubi-staging-uploads" }
+      ],
+      "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
+    },
+    "production": {
+      "name": "musubi-production-data-api",
+      "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local" },
+      "d1_databases": [
+        { "binding": "CONTROL_DB", "database_name": "musubi-production-control", "database_id": "<TF_OUTPUT>" }
+      ],
+      "r2_buckets": [
+        { "binding": "BUNDLES", "bucket_name": "musubi-production-bundles" },
+        { "binding": "UPLOADS", "bucket_name": "musubi-production-uploads" }
+      ],
+      "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
+    }
+  }
+}
