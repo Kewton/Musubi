@@ -6,7 +6,8 @@
   "worktree_template": "../{repo}-issue-{number}",
   "baseline": [
     "./infra/scripts/link-env.sh",
-    "corepack enable >/dev/null 2>&1 || true; pnpm install --frozen-lockfile",
+    "corepack enable",
+    "pnpm install --frozen-lockfile",
     "pnpm lint",
     "pnpm typecheck"
   ],
