@@ -181,8 +181,8 @@ curl -s "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/r2/buckets" \
 |---|---|---|
 | `musubi-tf-dev` | アカウント①（dev+staging）のTerraform | `TF_CLOUDFLARE_API_TOKEN` |
 | `musubi-ci-dev` | アカウント①のCIデプロイ | `CLOUDFLARE_API_TOKEN` |
-| `musubi-tf-prod` | アカウント②（production）のTerraform | `TF_CLOUDFLARE_API_TOKEN_PROD` |
-| `musubi-ci-prod` | アカウント②のCIデプロイ | `CLOUDFLARE_API_TOKEN_PROD` |
+| `musubi-tf-prod` | アカウント②（production）のTerraform | `TF_CLOUDFLARE_API_TOKEN_PROD`（**GitHub に置かない**。手元の `.env` のみ） |
+| `musubi-ci-prod` | アカウント②のCIデプロイ | `CLOUDFLARE_API_TOKEN_PROD`（**`production` 環境 Secret**） |
 
 増えるのは10分程度。
 
@@ -274,27 +274,41 @@ pnpm exec wrangler whoami    # どのアカウントに繋がっているか確�
 
 ### 🧑 H-08：GitHub Secrets / Variables 登録
 
-**Secrets（リポジトリレベル）**
+> **2026-09-14 に置き場所を変更した**（`04` §3・§3.1・§7）。**Account ID は公開しない**ので Secret へ、
+> **本番の資格情報は `production` 環境**へ移した。登録は `scripts/setup-github-secrets.sh`（置き場所の規則を内蔵）。
+
+**リポジトリ Secret**（同じリポジトリのすべてのワークフローから届く）
 
 | 名前 | 中身 | 出所 |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | CI用トークン | H-02 ② |
-| `TF_CLOUDFLARE_API_TOKEN` | Terraform用トークン | H-02 ① |
+| `CLOUDFLARE_API_TOKEN` | CI用トークン（アカウント①） | H-02 ② |
+| `TF_CLOUDFLARE_API_TOKEN` | Terraform用トークン（アカウント①） | H-02 ① |
 | `R2_ACCESS_KEY_ID` | tfstate用 | H-03 |
 | `R2_SECRET_ACCESS_KEY` | tfstate用 | H-03 |
-| `CLOUDFLARE_API_TOKEN_PROD` | production用CIトークン（**案A確定により必須**） | H-02 ② |
-| `TF_CLOUDFLARE_API_TOKEN_PROD` | production用Terraformトークン（**同上・必須**） | H-02 ① |
+| `CLOUDFLARE_ACCOUNT_ID` | アカウント①の ID。**Variable にしない**（ログに平文で出る） | H-01 |
+| `R2_S3_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`。URL に Account ID を含む | H-03 |
 
-**Variables（リポジトリレベル）**
+**`production` 環境 Secret**（`environment: production` を宣言し、`v*` タグで起動し、Kewton が承認したジョブからだけ届く）
+
+| 名前 | 中身 | 出所 |
+|---|---|---|
+| `CLOUDFLARE_API_TOKEN_PROD` | production用CIトークン（アカウント②） | H-02 ② |
+| `CLOUDFLARE_ACCOUNT_ID_PROD` | アカウント②の ID | H-01 |
+
+**GitHub に置かないもの**
+
+| 名前 | 理由 |
+|---|---|
+| `TF_CLOUDFLARE_API_TOKEN_PROD` | CI で production の plan を回さない（2026-09-14 決定）。production への apply は人が立ち会って手元から（#4）。**手元の `.env` にだけ置く** |
+
+**リポジトリ Variable**（公開してよい値だけ）
 
 | 名前 | 中身 |
 |---|---|
-| `CLOUDFLARE_ACCOUNT_ID` | H-01（dev/staging 用アカウント） |
-| `CLOUDFLARE_ACCOUNT_ID_PROD` | H-01 アカウント②。**案A確定により①とは別の値**（同値にしない） |
-| `CLOUDFLARE_ZONE_ID` | H-04（未取得なら空でよい） |
-| `TFSTATE_BUCKET` | `musubi-tfstate` |
-| `R2_S3_ENDPOINT` | `https://<ACCOUNT_ID>.r2.cloudflarestorage.com` |
+| `TFSTATE_BUCKET` | `musubi-tfstate`（`backend.tf` に書かれていて公開済み） |
+| `CLOUDFLARE_ZONE_ID` | H-04（保留中。未取得なら空でよい） |
 
+- [x] **2026-09-14：置き場所を変更**。Account ID と R2 エンドポイントを Variable → リポジトリ Secret、本番の2つを `production` 環境 Secret へ移し、`TF_CLOUDFLARE_API_TOKEN_PROD` を GitHub から外した
 - [x] **2026-09-12：Secrets 6/6・Variables 4/5 を登録完了。** 値は `.env` から `gh secret set` の標準入力へ直接渡し、チャット・ログ・コマンド引数に出していない。残る Variable は `CLOUDFLARE_ZONE_ID` のみ（H-04 まで空でよい）
 - [x] 2026-09-08：Secrets `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` と Variables `CLOUDFLARE_ACCOUNT_ID` / `TFSTATE_BUCKET` / `R2_S3_ENDPOINT` を登録。ローカルの `.env` はGit除外・権限0600。H-02のTerraform/CIトークンおよびproduction向け設定は未登録
 

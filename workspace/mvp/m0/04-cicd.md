@@ -75,70 +75,44 @@ jobs:
 > | 4 | `AWS_ENDPOINT_URL_S3` が無い | backend が R2 を見つけられず init が落ちる | GitHub Variable `R2_S3_ENDPOINT` を渡す（`infra/terraform/README.md` §3） |
 > | 5 | 3環境とも `TF_CLOUDFLARE_API_TOKEN` / `vars.CLOUDFLARE_ACCOUNT_ID` | H-14 案A でアカウントを分けた後なので、**production の plan は必ず失敗する**（①のトークンが②に届かないことを実測済み） | matrix で環境ごとに secret 名を切り替える |
 
-```yaml
-name: terraform-plan
-on:
-  pull_request:          # ★ paths で絞らない（訂正3）。必須チェックは「常に結果を返す」必要がある
+**正本は `.github/workflows/infra-plan.yml`。** ここにワークフローの全文を複製しない
+（複製した YAML は実装とずれ、2026-09-13 までに2度バグを持ち込んだ。上の訂正表と、下の訂正6）。
 
-permissions:
-  contents: read
+構造と、壊さないための規則だけを書く。
 
-jobs:
-  terraform-plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        include:           # ★ 環境ごとに資格情報を切り替える（訂正5）
-          - { env: dev,        token: TF_CLOUDFLARE_API_TOKEN,      account: CLOUDFLARE_ACCOUNT_ID }
-          - { env: staging,    token: TF_CLOUDFLARE_API_TOKEN,      account: CLOUDFLARE_ACCOUNT_ID }
-          - { env: production, token: TF_CLOUDFLARE_API_TOKEN_PROD, account: CLOUDFLARE_ACCOUNT_ID_PROD }
-    permissions: { contents: read, pull-requests: write }
-    env:
-      CLOUDFLARE_API_TOKEN:  ${{ secrets[matrix.token] }}
-      TF_VAR_account_id:     ${{ vars[matrix.account] }}
-      AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}       # backend は常にアカウント①の R2
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      AWS_ENDPOINT_URL_S3:   ${{ vars.R2_S3_ENDPOINT }}            # ★ 訂正4
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
-
-      # ★ 訂正3：変更が無ければ以降を飛ばし、ジョブ自体は success で終わらせる
-      - id: changed
-        run: |
-          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- infra/terraform; then
-            echo "tf=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "tf=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ★ 訂正1：.terraform-version を読んで渡す
-      - id: tfver
-        if: steps.changed.outputs.tf == 'true'
-        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
-      - uses: hashicorp/setup-terraform@v4          # ★ 訂正2
-        if: steps.changed.outputs.tf == 'true'
-        with:
-          terraform_version: ${{ steps.tfver.outputs.version }}
-          terraform_wrapper: false                   # wrapper は出力と exit code を包むので切る
-
-      - if: steps.changed.outputs.tf == 'true'
-        run: terraform -chdir=infra/terraform/envs/${{ matrix.env }} init -input=false -lockfile=readonly
-      - if: steps.changed.outputs.tf == 'true'
-        run: terraform -chdir=infra/terraform/envs/${{ matrix.env }} plan -input=false -no-color -out=tfplan > /dev/null
-      # PR コメントには Plan 行とリソースアドレスだけを貼る（§3.1）
+```
+changes         … PR が infra/terraform か .terraform-version を触ったかを判定する
+plan (dev)      … 触っていれば plan を回し、PR コメントに Plan 行とリソースアドレスだけを貼る
+plan (staging)  … 同上
+terraform-plan  … 上の結果を1つに畳む集約ジョブ。★必須チェックに登録する名前はこれ
 ```
 
-> **fork からの PR には secrets が渡らない。** public リポジトリなので、fork PR ではこのジョブの init が必ず落ちる。
+| 規則 | 理由 |
+|---|---|
+| **`paths` で起動を絞らない** | 必須チェックは常に結果を返す必要がある（訂正3） |
+| **必須チェックは集約ジョブ `terraform-plan` に登録する。matrix ジョブに登録しない** | **訂正6**：matrix のチェック名は `plan (dev)` のように値付きで報告され、`terraform-plan` という名前は出ない。必須にすると永久に待機状態になる |
+| 集約ジョブは `if: always()`。`!cancelled()` にしない | 取り消されて skipped になった必須チェックを GitHub は**通過**として扱い、plan を経ずにマージできてしまう |
+| plan は `-lock=false` | 読み取りだけで、concurrency で取り消されると R2 にロックが残り次の apply を止めるため |
+| 資格情報は plan のステップにだけ渡す（ジョブの env にしない） | 変更の無い PR や他のステップのログに出さない |
+| **Account ID と R2 エンドポイントは Secret から渡す** | `vars` はマスクされずログに平文で出る（2026-09-14 移行済み。§3.1） |
+| **production の plan は PR で回さない** | 下の決定 |
+
+### production の plan を PR で回さない（2026-09-14 決定：(c)）
+
+**PR の plan は dev と staging だけ。** production の資格情報は **`production` 環境の Secret** に置き、
+`v*` タグで起動し Kewton が承認したジョブ（§5）からしか届かないようにした。
+
+- `pull_request` のワークフローは **PR 側のブランチに書かれた定義で動く**。リポジトリ全体に置いた Secret には、
+  ワークフローを書き換えた PR からも手が届く。PR を作るのは AI ワーカーである
+- 案 (b)「production の plan に `environment: production` を付ける」は成立しない。`production` 環境は
+  `v*` タグからのデプロイしか許可しておらず、PR のブランチでは起動しない
+- 3環境は同じモジュールで違いは変数だけなので、構成の妥当性は dev と staging の plan で見える。
+  production の設定の構文・型は、資格情報を使わない `tf-validate` ゲートが PR で見ている
+- **代償**：production の実物との差分が見えるのはリリース時（承認の後ろ）になる
+- `TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置かない。production への apply は人が立ち会って手元から行う（#4）
+
+> **fork からの PR には secrets が渡らない。** public リポジトリなので、fork PR では plan が必ず落ちる。
 > 1人開発のうちは実害がないが、**`pull_request_target` で回避しないこと**（公開リポジトリの典型的な権限昇格経路）。
->
-> **#14 で決めること：PR の plan に production のトークンを渡してよいか。**
-> 上の形では、PR を出したブランチのコードが `TF_CLOUDFLARE_API_TOKEN_PROD` を持って走る。plan は読み取りだが、
-> §7 の「staging のワークフローから prod のトークンに手が届かない構造」とは緊張関係にある。
-> 選択肢は (a) このまま（1人開発・fork には渡らない）／(b) production の plan だけ `environment: production` を付けて
-> 承認を挟む（毎 PR で承認が要る）／(c) production の plan は PR では回さず、タグ時にだけ回す。
 
 **`terraform apply` は CI から自動実行しない。** 環境資源の作成/破壊は 🧑 人間が手元で（またはworkflow_dispatch＋承認で）実行する。理由：Cloudflareアカウント資源の誤destroyは復旧不能なものを含む（R2データ・D1データ）。**M0の段階で自動applyまで踏み込む利得より、事故のコストのほうが大きい。**
 
@@ -178,13 +152,9 @@ jobs:
    ```
    → `Plan: 3 to add, 0 to change, 0 to destroy.` とリソースアドレス（`# cloudflare_r2_bucket.tfstate will be created`）だけが残る。**差分の中身を見たいときは手元で `terraform show tfplan` を開く。**
 4. **変数を `echo` / `env` / `set -x` で出さない。** デバッグ時も同じ。
-5. 🧑 **`CLOUDFLARE_ACCOUNT_ID` と `R2_S3_ENDPOINT` は Variables から Secrets へ移すことを検討する**（H-08）。Secrets なら Actions が自動マスクする。`R2_S3_ENDPOINT` はアカウントIDを URL に含むため、Variable のままだと必ずログに出る
-   ```bash
-   # 移す場合（値は標準入力で渡す。コマンド引数に書かない）
-   gh secret set CLOUDFLARE_ACCOUNT_ID --repo Kewton/Musubi
-   gh variable delete CLOUDFLARE_ACCOUNT_ID --repo Kewton/Musubi
-   ```
-   → 移したら、本ファイルの `vars.CLOUDFLARE_ACCOUNT_ID` / `vars.CLOUDFLARE_ACCOUNT_ID_PROD` を `secrets.` へ書き換える。`TFSTATE_BUCKET` は Variable のままでよい
+5. ✅ **`CLOUDFLARE_ACCOUNT_ID` と `R2_S3_ENDPOINT` は Secret に置く**（2026-09-14 移行済み）。Secret なら Actions が自動でマスクする。
+   `R2_S3_ENDPOINT` は URL に Account ID を含むので、Variable のままだと必ずログに出る。
+   `CLOUDFLARE_ACCOUNT_ID_PROD` は `production` 環境の Secret（§5）。`TFSTATE_BUCKET` はバケット名が `backend.tf` に書かれていて公開済みなので Variable のまま
 
 > **フォークからの PR には Secrets が渡らない。** public リポジトリなので `terraform-plan` は fork PR で必ず失敗する。required status check にしている以上、外部PRは永久に green にならない。1人開発のうちは実害がないが、**`pull_request_target` で回避しようとしないこと**——公開リポジトリの典型的な権限昇格経路になる。
 
@@ -205,7 +175,7 @@ jobs:
     environment: staging
     env:
       CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN }}'
-      CLOUDFLARE_ACCOUNT_ID: '${{ vars.CLOUDFLARE_ACCOUNT_ID }}'
+      CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -225,7 +195,7 @@ jobs:
           CHECKPOINT_DISABLE: "1"
           AWS_ACCESS_KEY_ID:     '${{ secrets.R2_ACCESS_KEY_ID }}'
           AWS_SECRET_ACCESS_KEY: '${{ secrets.R2_SECRET_ACCESS_KEY }}'
-          AWS_ENDPOINT_URL_S3:   '${{ vars.R2_S3_ENDPOINT }}'
+          AWS_ENDPOINT_URL_S3:   '${{ secrets.R2_S3_ENDPOINT }}'
         run: |
           # init の stderr は endpoint URL（アカウント ID を含む）を出しうるので捨てる。public リポジトリの CI ログは公開される
           terraform -chdir=infra/terraform/envs/staging init -input=false -lockfile=readonly -no-color >/dev/null 2>&1 \
@@ -270,9 +240,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: production        # ← 🧑 required reviewer による承認待ちがここで入る
     env:
-      # 🧑 H-14 で production を別アカウントにした場合、ここだけトークンが変わる
+      # ★ この2つは **production 環境の Secret**（2026-09-14）。リポジトリ全体には置いていないので、
+      #   environment: production を宣言し、v* タグで起動し、Kewton が承認したこのジョブからしか読めない
       CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}'
-      CLOUDFLARE_ACCOUNT_ID: '${{ vars.CLOUDFLARE_ACCOUNT_ID_PROD }}'
+      CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}'
     steps:
       # staging と同一手順。--env production / musubi-production-control に読み替え
       # ⓪ の乖離チェックも同じ形で `envs/production` と `--env production` に読み替える。
@@ -350,7 +321,10 @@ Free の上限はアカウント単位。**M0で枠を食う主犯はユーザ�
 
 - Worker の secrets（M2以降：LINE Channel Secret 等）は `wrangler secret put` で環境ごとに投入し、**GitHub Secrets からは CI 経由で流し込まない**（CIログ・Actions権限を経由させない）
 - M0時点で必要な secret は無い（`GIT_SHA` は `--var` で十分＝公開情報）
-- 🧑 H-14 でアカウントを分けた場合、**staging用と production用でCIトークンが別物**になる。`deploy-production.yml` だけが `..._PROD` を参照する（§5）——**staging のワークフローから prod のトークンに手が届かない**構造にしておく
+- **本番の資格情報は `production` 環境の Secret にだけ置く**（2026-09-14）。`CLOUDFLARE_API_TOKEN_PROD` と
+  `CLOUDFLARE_ACCOUNT_ID_PROD` は、`environment: production` を宣言し、`v*` タグで起動し、Kewton が承認したジョブからしか読めない。
+  **リポジトリ全体の Secret にしない**：`pull_request` のワークフローは PR 側のブランチの定義で動くので、ワークフローを書き換えた PR から届いてしまう。
+  `TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置かない（production への apply は手元から）
 - 企画書12章「Builder Containerに本番資格情報を一切置かない」の姿勢を、**CIランナーにも同じく適用する**：CIトークンは Workers Scripts / D1 / R2 の Edit のみ（🧑 H-02 ②）
 - **リポジトリが public である前提を忘れない。** ログ・PRコメント・アーティファクトはすべて公開される。Variables はマスクされない（→ §3.1）
 

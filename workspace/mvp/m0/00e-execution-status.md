@@ -180,6 +180,45 @@ CI で `terraform init` するには環境変数 **`AWS_ENDPOINT_URL_S3`** が�
 **`--check` は binding の欠落を検出しない。** binding を1つも書いていない wrangler.jsonc でも「一致」で exit 0 になる（gateway のような Worker を正当に扱う仕様）。
 data-api が D1 / R2 / Queue を書き忘れても通るので、**#6・#8・#9 の本文に契約として明記した**。
 
+## 2026-09-14 追記：#6・#14 の検証と、資格情報の置き場所の変更
+
+### 検証（報告を鵜呑みにせず確認）
+
+| Issue | 結論 | 独立に確かめたこと |
+|---|---|---|
+| #6 | ✅ | wrangler.jsonc が契約どおり（3環境・`CONTROL_DB`/`BUNDLES`/`UPLOADS`・禁止項目なし・Account ID なし・`workers_dev` と `preview_urls` を無効化）。**`--check` が binding の欠落を見逃す穴をテストで塞いでいた**：`CONTROL_DB` を消すと、実ファイルを検査するテストと実機 workerd 上の `/healthz` が落ちる（復元後 59件・41件通過） |
+| #14 | 実装 ✅／追跡 ⚠️ | 「Terraform を触らない PR」の確認は #46・#47 で成立（plan は skipped、`terraform-plan` は no-op で success）。**ただし DoD のチェックボックスを1つも更新せず、コメントも無いまま COMPLETED で閉じていた** |
+
+**#14 の実装は、手順書の訂正版より正確だった。** 訂正版は matrix ジョブを `terraform-plan` と名付けていたが、matrix のチェック名は
+`plan (dev)` のように値付きで報告されるため、必須にすると永久に待機状態になっていた。エージェントは集約ジョブで回避し、
+取り消し時に skipped の必須チェックが「通過」扱いになる点まで考慮していた。`04` §3 を訂正6として直した。
+
+### 見つかった問題と対処
+
+1. **`vars` のまま渡していた Account ID と R2 エンドポイントが、次の「Terraform を触る PR」で公開ログに出るところだった。**
+   今まで出ていなかったのは plan が一度も走っていないため（#46・#47 のログで出現0回）
+2. **本番トークンがリポジトリ全体の Secret に置かれ、どの PR のワークフローからも届いた。** `pull_request` は PR 側のブランチの
+   定義で動くので、`04` §7 の「prod のトークンに手が届かない構造」は成立していなかった
+3. **案 (b) は成立しない**と判明：`production` 環境は `v*` タグからしか起動できず、PR では動かない
+
+### 決定（2026-09-14）
+
+- **(c)**：PR では production の plan を回さない
+- **Account ID は非公開のまま扱う**
+
+### 実施した移行
+
+| 名前 | 変更前 | 変更後 |
+|---|---|---|
+| `CLOUDFLARE_ACCOUNT_ID` | Variable | **リポジトリ Secret** |
+| `R2_S3_ENDPOINT` | Variable | **リポジトリ Secret** |
+| `CLOUDFLARE_ACCOUNT_ID_PROD` | Variable | **`production` 環境 Secret** |
+| `CLOUDFLARE_API_TOKEN_PROD` | リポジトリ Secret | **`production` 環境 Secret** |
+| `TF_CLOUDFLARE_API_TOKEN_PROD` | リポジトリ Secret | **GitHub から削除**（手元の `.env` には残す。#4 で使う） |
+
+順序は「新しい置き場に登録 → ワークフローと手順書を切り替えて CI で確認 → 古いものを削除」。値は `.env` から標準入力で渡し、表示していない。
+`infra-plan.yml`・`04` §3/§3.1/§4/§5/§7・H-08 の表・`setup-github-secrets.sh`（置き場所の規則と、置いてはいけない場所に残っていないかの検査を内蔵）・`CLAUDE.md` を更新した。
+
 ## 残っている判断・本人操作
 
 1. ~~**H-14 アカウント構成**~~ → **2026-09-12 決定済み**（案A・上記）。残る本人操作は**アカウント②の新規作成**（メール認証）。
