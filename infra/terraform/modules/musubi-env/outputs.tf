@@ -2,7 +2,8 @@
 #   キーを勝手に増やさない・減らさない・改名しない。
 #
 #   wfp_namespace_name / turnstile_sitekey は「まだ資源が無い」ことを null で表す。
-#   WfP は wfp_enabled = false 固定（Issue #21）、Turnstile は custom_domain_enabled 待ち。
+#   WfP は wfp_enabled = false 固定で count = 0 なので one() が null を返す。
+#   Turnstile は custom_domain_enabled 待ち。
 #   資源が入る時も schema は変えず、この2つの値だけが null から埋まる。
 output "bindings" {
   description = "wrangler.jsonc へ同期する値。terraform output -json bindings で取り出す。"
@@ -19,7 +20,7 @@ output "bindings" {
     r2_bundles_name    = cloudflare_r2_bucket.bundles.name
     r2_uploads_name    = cloudflare_r2_bucket.uploads.name
     queue_build_name   = cloudflare_queue.build.queue_name
-    wfp_namespace_name = null
+    wfp_namespace_name = one(cloudflare_workers_for_platforms_dispatch_namespace.apps[*].name)
     turnstile_sitekey  = null
   }
 }
