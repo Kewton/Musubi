@@ -155,12 +155,31 @@ infra/scripts/sync-bindings.ts
   性質: 冪等（変化がなければ書き込まない）
 ```
 
-**CIでのドリフト検知**
+**乖離チェックの置き場（2026-09-13 決定：(c) の変形）**
 
-```yaml
-- run: pnpm infra:sync --env staging
-- run: git diff --exit-code || (echo "::error::wrangler.jsonc が terraform output と乖離しています" && exit 1)
-```
+乖離が生まれる原因は2つしかない。**`terraform apply`**（D1 は作り直すと ID が変わる）と、**`wrangler.jsonc` の手修正**である。
+apply は CI では行わず、人が立ち会う回にしか起きない。だからチェックは PR ではなく、次の2か所に置く。
+
+| タイミング | やること | 置き場 |
+|---|---|---|
+| **apply の直後** | `pnpm infra:sync --env <env>` で書き戻し、そのままコミットする | `infra/terraform/README.md` §2（#4 の立ち会い手順） |
+| **デプロイの直前** | `pnpm infra:sync --env <env> --check`。乖離があればデプロイしない | `04` §4（staging）・§5（production） |
+
+**PR の検証ゲート（lint-typecheck-unit / verify.yaml）には入れない。** 理由：
+
+- **スナップショットを渡す形は空振りする。** apply で ID が変わった瞬間に古くなり、実物とズレているのに通る。
+  置き場も無い（Account ID を含むのでコミットできない、Artifact は public で公開される、Secret は手で更新するので古くなる）
+- **PR で実物を読む形は、ワーカーのローカル検証を本物の state に触れさせる**（verify-parity により verify.yaml にも同じゲートが要る）
+- 同期先の wrangler.jsonc と staging の state が揃うまで、**全 PR が落ちる**
+
+手修正による乖離は PR では捕まらないが、main へのマージ直後に staging へ自動デプロイされる段で捕まり、**本番には届かない**。
+
+> **必要な資格情報は R2（tfstate の backend）の3つだけ。** `terraform output` は state を読むだけなので Cloudflare のトークンは要らない
+> （2026-09-13 実測：CF 系の環境変数0個で `init` → `infra:sync --check` まで通過、出力に Account ID なし）。
+
+> ⚠️ **`--check` は「binding が欠けていること」を検出しない。** Terraform 由来の binding を1つも持たない Worker（gateway）を
+> 正当に扱うための仕様で、data-api が D1 / R2 / Queue の binding を書き忘れても通る。
+> **binding を書く責任は各 Worker の wrangler.jsonc を作る Issue（#6・#8・#9）にある。**
 
 > **なぜ生成ファイルにしないのか**：企画書11章が「wrangler.jsonc＝サービス単位の**正本**」と定めている。生成物にすると正本が Terraform 側に移り、二層の線が崩れる。
 > **だからこう扱う**：wrangler.jsonc は人間が読み書きする正本。ただし**Terraform由来のID欄だけは機械が同期し、乖離をCIが落とす**。正本性と手作業ゼロを両立させる唯一の形。

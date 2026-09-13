@@ -49,8 +49,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      # ★ wrangler.jsonc が terraform output と乖離していないか
-      - run: pnpm infra:sync --env staging --check
+      # ★ infra:sync --check はここに入れない（2026-09-13 決定）。§4・§5 のデプロイ直前に置く（03 §3）
 
   pr-title:
     if: github.event_name == 'pull_request'
@@ -213,6 +212,26 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version-file: .node-version, cache: pnpm }
       - run: pnpm install --frozen-lockfile
+
+      # ⓪ デプロイ直前の乖離チェック（2026-09-13 決定・03 §3）
+      #    wrangler.jsonc の Terraform 由来の欄が、staging の実物（state）と一致しなければデプロイしない。
+      #    必要なのは tfstate の backend（R2）の資格情報だけ。Cloudflare のトークンは使わない。
+      - id: tfver
+        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v4
+        with: { terraform_version: '${{ steps.tfver.outputs.version }}', terraform_wrapper: false }
+      - name: 乖離チェック（wrangler.jsonc ⇔ terraform output）
+        env:
+          CHECKPOINT_DISABLE: "1"
+          AWS_ACCESS_KEY_ID:     '${{ secrets.R2_ACCESS_KEY_ID }}'
+          AWS_SECRET_ACCESS_KEY: '${{ secrets.R2_SECRET_ACCESS_KEY }}'
+          AWS_ENDPOINT_URL_S3:   '${{ vars.R2_S3_ENDPOINT }}'
+        run: |
+          # init の stderr は endpoint URL（アカウント ID を含む）を出しうるので捨てる。public リポジトリの CI ログは公開される
+          terraform -chdir=infra/terraform/envs/staging init -input=false -lockfile=readonly -no-color >/dev/null 2>&1 \
+            || { echo "::error::terraform init に失敗（詳細はログに出さない。手元で同じ手順を再現すること）"; exit 1; }
+          pnpm infra:sync --env staging --check
+
       - run: pnpm build
 
       # ① D1マイグレーション（デプロイより先。前方互換規律が前提）
@@ -256,6 +275,8 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: '${{ vars.CLOUDFLARE_ACCOUNT_ID_PROD }}'
     steps:
       # staging と同一手順。--env production / musubi-production-control に読み替え
+      # ⓪ の乖離チェックも同じ形で `envs/production` と `--env production` に読み替える。
+      #    backend（state の置き場）は production でもアカウント①の R2 なので、R2 の資格情報は staging と同じ
       # 最後に smoke --env production
 ```
 

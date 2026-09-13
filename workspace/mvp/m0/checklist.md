@@ -86,7 +86,7 @@
 
 ## M0-2：CI/CD（`04`）
 
-- [ ] 🤖 `ci.yml`：lint / typecheck / unit / PRタイトル / **infra:sync ドリフト検知**（≤5分）
+- [ ] 🤖 `ci.yml`：lint / typecheck / unit / PRタイトル（≤5分）。**infra:sync の乖離チェックはデプロイ直前に置く**（2026-09-13 決定・`03` §3）
 - [ ] 🤖 `infra-plan.yml`：3環境の `terraform plan` をPRコメント（**apply は自動化しない**）
 - [ ] 🤖 `deploy-staging.yml`：main → D1 migration → **data-api→gateway→host の順** → smoke（≤10分）
 - [ ] 🧑🤖 `deploy-production.yml`：tag `v*` → **承認** → deploy → smoke
