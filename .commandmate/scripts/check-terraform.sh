@@ -25,6 +25,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# terraform が起動のたびに行う更新確認（ネットワーク）を切る。結果を決定的にし、余計な出力も出させない
+export CHECKPOINT_DISABLE=1
 TF_DIR="${ROOT}/infra/terraform"
 WANT="$(tr -d '[:space:]' < "${ROOT}/.terraform-version")"
 
@@ -33,7 +35,13 @@ if ! command -v terraform >/dev/null 2>&1; then
   exit 1
 fi
 
-HAVE="$(terraform version | head -n1 | sed -E 's/^Terraform v//')"
+# ★ `terraform version | head -n1` と書かないこと。head が1行で閉じたあと terraform が2行目を書くと
+#   SIGPIPE（exit 141）で死に、pipefail がそれをパイプライン全体の失敗にし、set -e が黙って終了する。
+#   タイミング次第の競合で、CI では同じ行が tf-fmt で通り tf-validate で落ちた（2026-09-13 実測）。
+#   出力を丸ごと受けてから1行目を切り出す。
+TF_VERSION_OUT="$(terraform version)"
+HAVE="${TF_VERSION_OUT%%$'\n'*}"
+HAVE="${HAVE#Terraform v}"
 if [ "${HAVE}" != "${WANT}" ]; then
   echo "NG  terraform のバージョンが .terraform-version と一致しない（入っている: ${HAVE} / 期待: ${WANT}）" >&2
   exit 1
