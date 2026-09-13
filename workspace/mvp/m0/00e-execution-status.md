@@ -115,6 +115,51 @@ R2キーは2026-12-07に失効する。失効前に再発行し、ローカル `
 
 初回 push で `main` が作成され、H-07 の残タスク（main 保護）も解消した。
 
+## 2026-09-13 追記：#2・#7・#24・#32 の検証と、検証ゲートの所有者の決定
+
+### 検証結果（報告を鵜呑みにせず、別経路で独立に確認した）
+
+| Issue | 結論 | 独立に確認したこと |
+|---|---|---|
+| #2 | ✅ | `terraform plan -detailed-exitcode` が No changes。**Terraform を通さず Cloudflare API を直接**叩いてアカウント①に D1・R2×2・Queue が実在し、**②には何も漏れていない**ことを確認 |
+| #7 | ✅ | テストが**実機の workerd**（`createTestHarness`）で動くことを確認し、キャッシュ無しで 11/11 通過。DO を強制退避させても行が残る |
+| #24 | ✅ | **appspec schema の SHA-256 を CommandAgent の実バイトから再計算して一致**。headless 契約の版はソースの定数と一致。「pre-release タグ3本には対象ファイルが無い」も3本とも 404 を確認。tarball は理由付き null（→ #38） |
+| #32 | ✅ | 出典7ページをすべて取得し、事務所の実在と主要な価格・納期を照合。依頼文の未記入0件。公開側への漏洩0件。**別リポジトリの PR では自動クローズされないため手動でクローズ** |
+
+### orchestrator が削除したルールの原因
+
+`scope_companions.require` の `{"when": ".github/workflows/ci.yml", "add": [".commandmate/verify.yaml"]}` は、
+**`require[].add` に harness path を書くことを禁じる規則（profile-contract.md §9.6）に違反**しており、
+profile の読み込み時に `load_error` になる。orchestrator は消さないと起動できなかった。**不正だったのは
+このルールを書いた側（2026-09-12 の引き継ぎ準備）であり、削除は正しい処置だった。**
+
+### 決定：A ＋ parity check
+
+| | 内容 |
+|---|---|
+| **A** | **`verify.yaml` は人（監督側）が持つ。** ワーカーは編集できない（CommandMate の境界を緩めない） |
+| **parity check** | `.commandmate/scripts/check-verify-parity.mjs` を追加し、`verify-parity` ゲートとして両側に入れた。verify.yaml の gate id と ci.yml の `# verify-gate:` 目印を**順序まで**照合する |
+
+**スクリプトを `infra/scripts/` ではなく `.commandmate/scripts/` に置いた。** `infra/scripts/` だと、
+ゲートを足したいワーカーがチェックを「常に通る」ように書き換えられるため。
+
+BorderFreeKidsMap の同名スクリプトに1点足した：**目印の無い `run:` ステップがあっても落とす**（目印を付けずに
+ステップを足す抜け道を塞ぐ）。違反を5種類仕込み、4種は落ち（exit 1）、別ジョブの目印は誤検知しない
+（exit 0）ことを実測。`pnpm` 経由でも終了コードが伝わることを確認。
+
+### あわせて行ったこと
+
+- `verify.yaml` 冒頭の**誤った指示を訂正**（「ゲートを足すときは ci.yml と同時に直すこと」はワーカーに不可能な指示だった）
+- #3 の本文を実態に合わせて書き直した（#2 がモジュール骨格まで作成済み。残りは prefix 変数化・KV・wfp_enabled・staging/production の呼び出し）
+- #13 を 🤖 → **🧑🤖** に変更（Issue の中身がゲート追加そのもの）
+- **#38（M1）を起票**：テンプレート tarball のピン。#24 がクローズ済みで追跡者がいなくなるため
+- `.commandmate/orchestrate/` と `.commandmate/tasks/cmate-orchestrate-issue-*.yaml` を ignore（BorderFreeKidsMap と同じ扱い）
+
+### #14 への申し送り
+
+CI で `terraform init` するには環境変数 **`AWS_ENDPOINT_URL_S3`** が要るが、GitHub Variable の名前は
+**`R2_S3_ENDPOINT`**。ワークフローで対応付けること（`infra/terraform/README.md` §3）。
+
 ## 残っている判断・本人操作
 
 1. ~~**H-14 アカウント構成**~~ → **2026-09-12 決定済み**（案A・上記）。残る本人操作は**アカウント②の新規作成**（メール認証）。

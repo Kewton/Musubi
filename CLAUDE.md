@@ -50,14 +50,27 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 
 ```bash
 pnpm install          # corepack 経由で pnpm 10.13.1 が使われる
-pnpm check            # lint → typecheck → test（PR前に必ず通す）
+pnpm check            # verify-parity → lint → typecheck → test（PR前に必ず通す）
 pnpm build
 terraform version     # .terraform-version（1.16.2）を tfenv がピンする
 ```
 
-**検証ゲートの正本は [`.commandmate/verify.yaml`](.commandmate/verify.yaml)。**
-`.github/workflows/ci.yml` の `lint-typecheck-unit` と同じ4段（deps / lint / typecheck / unit）。
-**片方だけ直さない。** 両方を同時に直すこと（ズレると「ローカルは通るが CI で落ちる」が起きる）。
+## 検証ゲート（誰が何を直すか）
+
+**合格の定義は [`.commandmate/verify.yaml`](.commandmate/verify.yaml) と `.github/workflows/ci.yml` の
+`lint-typecheck-unit` の2か所にあり、5段（deps / verify-parity / lint / typecheck / unit）が順序まで一致する。**
+
+| | 直せる人 | 理由 |
+|---|---|---|
+| **`.commandmate/` 配下**（verify.yaml・scripts・profiles） | **人（監督側）だけ** | CommandMate がワーカーの編集範囲から外す。**審判を書き換えられる被審判は審判されていない** |
+| `.github/workflows/ci.yml` | ワーカーも可 | ただしゲートを足すと verify-parity が落ちる（↓） |
+
+- **ゲートの追加・削除は、人が `verify.yaml` と `ci.yml` を1コミットで同時に直す。**
+- ワーカーが `ci.yml` だけにゲートを足すと、`pnpm check:verify-parity` が落ちて PR はマージできない。
+  **それが「人の手が要る」ことの合図である。** ワーカーは止まって人に返すこと。`verify.yaml` を直そうとしない。
+- `ci.yml` の `lint-typecheck-unit` の `run:` ステップには、直前に `# verify-gate: <id>` の目印が要る。
+  **目印の無い run ステップを足しても落ちる**（目印を付けずに足す抜け道を塞いである）。
+- 照合するのは「どのゲートがどの順で走るか」まで。コマンドの文字列の一致までは見ない。
 
 ## git worktree で並列作業するとき
 

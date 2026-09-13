@@ -4,27 +4,38 @@
 #   - cmate-verify（ローカル）
 #   - commandmate verify <worktree-id>（サーバー）
 #   - commandmate wait <worktree-id> --verify（実行契約の裁定）
-#   - .github/workflows/ci.yml の lint-typecheck-unit ジョブ（**手で同期する**）
+#   - .github/workflows/ci.yml の lint-typecheck-unit ジョブ
 #
-# ゲートは ci.yml の lint-typecheck-unit と同じ4段・同じ順序である。
-# 片方だけ直すと「ローカルは通るが CI で落ちる」が起きる。両方を同時に直すこと。
+# ── 誰がこのファイルを直すか（2026-09-12 決定・00b / CLAUDE.md）──────────────
+# **ワーカーはこのファイルを編集できない。** CommandMate は .commandmate/ を scope.allow から
+# 既定で外し、profile でも緩められない（profile-contract.md §9.6）。
+# 「審判を書き換えられる被審判は、審判されていない」ためである。
+#
+# **ゲートの追加・削除は人（監督側）が、ci.yml と同時に1コミットで行う。**
+# ワーカーが ci.yml だけにゲートを足すと verify-parity が落ち、PR はマージできない。
+# それが「人の手が要る」ことの合図である。
+#
+# ── 食い違いの機械検知 ──────────────────────────────────────────────
+# gate id の並びは ci.yml の `# verify-gate: <id>` 目印と**順序まで**一致しなければならない。
+# .commandmate/scripts/check-verify-parity.mjs が照合し、ズレていれば verify-parity ゲートが落ちる。
+# 目印の無い run ステップが ci.yml にあっても落ちる（目印を付けずに足す抜け道を塞ぐ）。
 #
 # lint に含まれるもの（package.json の scripts.lint）:
 #   1. turbo run lint      … oxlint。cloudflare:workers の直接 import を app-do 以外で禁止
 #   2. check-deps.mjs      … 依存の向きを infra/scripts/dep-graph.mjs と照合し、
 #                            package.json と tsconfig references の両方の一致を要求する
-#   中身が空の M0 でも 2 が効くので、コードを書く前から境界が守られる。
 #
-# 【M0-2 以降で足すもの】
-#   - terraform fmt -check / terraform validate（Issue #3）
-#   - pnpm infra:sync --env staging --check（Issue #5・#13）
-#   これらは対象ファイルがまだ無いので、今は入れていない。
-#   ゲートに入れた時点で ci.yml 側にも同じものを足すこと。
+# 【追加予定のゲート】対象ファイルが揃った時点で、人が ci.yml と同時に足す：
+#   - terraform fmt -check / terraform validate（Issue #3 完了後）
+#   - pnpm infra:sync --env staging --check  （Issue #13）
 version: 1
 gates:
   - id: deps
     command: "corepack enable >/dev/null 2>&1 || true; pnpm install --frozen-lockfile"
     timeoutSec: 600
+  - id: verify-parity
+    command: "pnpm check:verify-parity"
+    timeoutSec: 60
   - id: lint
     command: "pnpm lint"
     timeoutSec: 300

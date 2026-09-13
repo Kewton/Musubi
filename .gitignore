@@ -33,3 +33,8 @@ workspace/naming/
 # ignore するとワークツリー側でスキルが見つからず、cmate-* の手順が使えなくなる。
 # 機械ごとに変わるローカル設定だけを除外する。
 .claude/settings.local.json
+
+# cmate-orchestrate の run artifact（plan / dispatch report / 生成された実行契約）。
+# run ごとに生まれる作業記録で、再現に要らない。verify.yaml・profiles・scripts は追跡する。
+.commandmate/orchestrate/
+.commandmate/tasks/cmate-orchestrate-issue-*.yaml
