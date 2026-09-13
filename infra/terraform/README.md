@@ -179,7 +179,7 @@ terraform destroy -auto-approve && terraform apply -auto-approve
 
 構成は3環境とも**同一モジュール**で、差分は引数だけ（アカウント ID / `env` / `wfp_enabled`。
 `custom_domain_enabled` は H-04 のドメイン取得後に足す）。`CLOUDFLARE_API_TOKEN` は環境ごとに切り替える
-（CI では `..._PROD` を渡す。`04` §5）。
+（手元では `.env` の `TF_CLOUDFLARE_API_TOKEN_PROD` を使う。**CI では production の plan を回さず**、`TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置いていない。`04` §3）。
 
 ---
 

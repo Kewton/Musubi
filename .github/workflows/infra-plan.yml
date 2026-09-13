@@ -61,11 +61,12 @@ jobs:
       matrix:
         # ★ 環境ごとに資格情報の名前を切り替える（04 §3 訂正5）。account_var は Terraform 側の変数名。
         #
-        # production の行は入れていない。**PR の plan に production のトークンを渡してよいかは 🧑 が決める**
-        # （04 §3 末尾の (a)/(b)/(c)。Issue #14）。(a) に決まったら次の1行を足す：
-        #   - { env: production, token: TF_CLOUDFLARE_API_TOKEN_PROD, account: CLOUDFLARE_ACCOUNT_ID_PROD, account_var: account_id_prod }
-        # production だけ変数名が account_id_prod なので、account_var を落とすと
-        # `No value for required variable` で止まる（envs/production/variables.tf、README §2）。
+        # ★ production の行は足さない（2026-09-14 決定：(c)。04 §3）。
+        #   PR の plan には production を含めない。production の資格情報は `production` 環境の Secret にだけ置き、
+        #   `v*` タグで起動し Kewton が承認したジョブからしか届かない。pull_request は PR 側のブランチに書かれた
+        #   ワークフロー定義で動くので、リポジトリ全体に置いた Secret には書き換えた PR からも手が届いてしまうため。
+        #   production の設定の妥当性（構文・型）は、資格情報を使わない tf-validate ゲートが PR で見ている（ci.yml）。
+        #   `TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置いていない（production への apply は手元から行う）。
         include:
           - { env: dev, token: TF_CLOUDFLARE_API_TOKEN, account: CLOUDFLARE_ACCOUNT_ID, account_var: account_id }
           - { env: staging, token: TF_CLOUDFLARE_API_TOKEN, account: CLOUDFLARE_ACCOUNT_ID, account_var: account_id }
@@ -81,9 +82,8 @@ jobs:
           terraform_wrapper: false # wrapper は出力と exit code を包むので切る
 
       # ── 資格情報はこのステップにだけ渡す ──────────────────────────────
-      # ⚠️ vars.* はマスクされず、ステップの env としてログに平文で出る（04 §3.1）。
-      #   CLOUDFLARE_ACCOUNT_ID* と R2_S3_ENDPOINT（URL にアカウント ID を含む）を Secrets へ移したら、
-      #   下の vars[matrix.account] / vars.R2_S3_ENDPOINT を secrets. に書き換える（04 §3.1 の 5）。
+      # ★ Account ID と R2 のエンドポイント（URL に Account ID を含む）は Secret から渡す（2026-09-14 移行済み）。
+      #   vars.* はマスクされず、ステップの env としてログに平文で出る。**ここに vars を戻さないこと**（04 §3.1）。
       #   ジョブ単位の env にしないのは、変更の無い PR や他のステップのログに出さないため。
       # plan は -lock=false。読み取りしかしないうえ、concurrency で取り消されると R2 に
       # ロックが残り、次の apply を force-unlock するまで止めてしまうため。
@@ -91,18 +91,18 @@ jobs:
         name: terraform init / plan (${{ matrix.env }})
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets[matrix.token] }}
-          ACCOUNT_ID: ${{ vars[matrix.account] }}
+          ACCOUNT_ID: ${{ secrets[matrix.account] }}
           ACCOUNT_VAR: ${{ matrix.account_var }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }} # backend は3環境とも常にアカウント①の R2
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          AWS_ENDPOINT_URL_S3: ${{ vars.R2_S3_ENDPOINT }} # ★ 04 §3 訂正4（infra/terraform/README.md §3）
+          AWS_ENDPOINT_URL_S3: ${{ secrets.R2_S3_ENDPOINT }} # ★ 04 §3 訂正4（infra/terraform/README.md §3）
           TF_DIR: infra/terraform/envs/${{ matrix.env }}
           CHECKPOINT_DISABLE: '1'
         run: |
           # 値は出さない。空かどうかだけを見る（fork PR・Dependabot には secrets が渡らない）
           for name in CLOUDFLARE_API_TOKEN ACCOUNT_ID AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_ENDPOINT_URL_S3; do
             if [ -z "${!name}" ]; then
-              echo "::error::${name} が空。fork からの PR か、Secret / Variable が未登録"
+              echo "::error::${name} が空。fork からの PR か、Secret が未登録"
               exit 1
             fi
           done

@@ -39,6 +39,20 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 - **CIログ・PRコメント・アーティファクトもすべて公開される。** Variables はマスクされない
   （`terraform plan` の扱いは `workspace/mvp/m0/04-cicd.md` §3.1）
 
+### 資格情報の置き場所（2026-09-14）
+
+| 置き場所 | 置くもの |
+|---|---|
+| リポジトリ Secret | dev/staging のトークン、R2 の鍵、**`CLOUDFLARE_ACCOUNT_ID`**、**`R2_S3_ENDPOINT`** |
+| **`production` 環境 Secret** | **`CLOUDFLARE_API_TOKEN_PROD`**、**`CLOUDFLARE_ACCOUNT_ID_PROD`** |
+| GitHub に置かない | `TF_CLOUDFLARE_API_TOKEN_PROD`（production への apply は人が手元から） |
+| リポジトリ Variable | 公開してよい値だけ（`TFSTATE_BUCKET` など） |
+
+- **Account ID と、それを含む値（R2 のエンドポイント URL）を Variable にしない。** ログに平文で出る
+- **本番の資格情報をリポジトリ全体の Secret にしない。** `pull_request` のワークフローは PR 側のブランチの定義で
+  動くので、ワークフローを書き換えた PR から届いてしまう。`production` 環境（`v*` タグ・承認必須）に閉じ込める
+- **PR で production の plan を回さない**（`04` §3）
+
 ## 手順
 
 - 作業は必ず Issue から。ブランチは `feat/<issue番号>-<slug>`
