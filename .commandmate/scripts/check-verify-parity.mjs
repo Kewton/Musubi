@@ -16,8 +16,13 @@
 //
 // 検査すること：
 //   1. verify.yaml の gate id の並びと、ci.yml の `# verify-gate: <id>` 目印の並びが**順序まで**一致する
-//   2. lint-typecheck-unit ジョブの `run:` ステップは、すべて直前に目印を持つ
+//   2. lint-typecheck-unit ジョブで `run:` を持つステップは、すべて直前に目印を持つ
 //      （目印を付けずにステップを足すと 1 が素通りするので、その穴を塞ぐ）
+//      `- run: x` の形も、`- name: x` / `- id: x` の次行に `run:` を書く形も、どちらもステップとして数える
+//
+// ゲートではない準備の run ステップ（例：.terraform-version を読む）は
+// `# verify-setup: <理由>` を直前に書いて明示的に除外する。黙った抜け道ではなく、
+// 書いた人の意図がレビューで見える形の除外である。gate id の並びには数えない。
 //
 // 検査しないこと：
 //   コマンドの中身の一致。verify.yaml は corepack の有効化を含み、ci.yml は setup action で
@@ -52,16 +57,47 @@ export function ciGateIds(jobLines) {
     .map((m) => m[1]);
 }
 
-/** 目印の無い run ステップを返す。空行は目印とステップの間に挟まってもよい。 */
-export function unmarkedRunSteps(jobLines) {
-  const out = [];
-  for (let i = 0; i < jobLines.length; i++) {
-    if (!/^\s*- run:/.test(jobLines[i])) continue;
-    let j = i - 1;
-    while (j >= 0 && jobLines[j].trim() === "") j--;
-    if (j < 0 || !/^\s*# verify-gate:/.test(jobLines[j])) out.push(jobLines[i].trim());
+/**
+ * steps 配下のステップを切り出す。1ステップ＝リスト項目（`- `）から次の同じ深さの項目の直前まで。
+ * `- run: x` と、`- name: x` の次行に `run:` がある形の両方を run ステップとして扱う。
+ */
+export function parseSteps(jobLines) {
+  const at = jobLines.findIndex((l) => /^\s*steps:\s*$/.test(l));
+  if (at < 0) return [];
+  let itemIndent = -1;
+  const steps = [];
+  for (let i = at + 1; i < jobLines.length; i++) {
+    const m = jobLines[i].match(/^(\s*)- /);
+    if (m && (itemIndent < 0 || m[1].length === itemIndent)) {
+      itemIndent = m[1].length;
+      steps.push({ start: i, lines: [jobLines[i]] });
+    } else if (steps.length && (jobLines[i].trim() === "" || jobLines[i].match(/^(\s*)/)[1].length > itemIndent)) {
+      steps[steps.length - 1].lines.push(jobLines[i]);
+    }
   }
-  return out;
+  const keyIndent = " ".repeat(itemIndent + 2);
+  return steps.map((st) => ({
+    ...st,
+    isRun: /^\s*- run:/.test(st.lines[0]) || st.lines.slice(1).some((l) => l.startsWith(`${keyIndent}run:`)),
+    label: st.lines.map((l) => l.trim()).filter(Boolean).join(" ").slice(0, 80),
+  }));
+}
+
+/** 直前（空行とコメント以外の行を遡る前）にある目印の種類を返す。 */
+function markerBefore(jobLines, start) {
+  let j = start - 1;
+  while (j >= 0 && jobLines[j].trim() === "") j--;
+  if (j < 0) return null;
+  if (/^\s*# verify-gate:/.test(jobLines[j])) return "gate";
+  if (/^\s*# verify-setup:\s*\S/.test(jobLines[j])) return "setup";
+  return null;
+}
+
+/** 目印（gate / setup）の無い run ステップを返す。 */
+export function unmarkedRunSteps(jobLines) {
+  return parseSteps(jobLines)
+    .filter((st) => st.isRun && markerBefore(jobLines, st.start) === null)
+    .map((st) => st.label);
 }
 
 export function assertGateParity(verifyIds, ciIds, unmarked) {

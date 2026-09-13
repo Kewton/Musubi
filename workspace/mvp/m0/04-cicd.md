@@ -66,31 +66,80 @@ jobs:
 
 ## 3. Terraform plan（`infra-plan.yml`）
 
+> **2026-09-13 訂正**：旧版のワークフローには、そのまま写すと壊れる箇所が5つあった（Issue #14 の実装前に発見）。
+>
+> | # | 旧版 | 何が起きるか | 訂正 |
+> |---|---|---|---|
+> | 1 | `setup-terraform` に `terraform_version_file` | **その入力は存在しない。** 無視されて最新版が入り、ピンが黙って効かない | `.terraform-version` を読んで `terraform_version` に渡す |
+> | 2 | `setup-terraform@v3` | 古い | `@v4` |
+> | 3 | `on.pull_request.paths` で絞り、`terraform-plan` を必須チェックにする | **Terraform を触らない PR で必須チェックが永久に「待機中」になり、全 PR がマージ不能** | 常に起動し、中で変更の有無を見て no-op にする（下記） |
+> | 4 | `AWS_ENDPOINT_URL_S3` が無い | backend が R2 を見つけられず init が落ちる | GitHub Variable `R2_S3_ENDPOINT` を渡す（`infra/terraform/README.md` §3） |
+> | 5 | 3環境とも `TF_CLOUDFLARE_API_TOKEN` / `vars.CLOUDFLARE_ACCOUNT_ID` | H-14 案A でアカウントを分けた後なので、**production の plan は必ず失敗する**（①のトークンが②に届かないことを実測済み） | matrix で環境ごとに secret 名を切り替える |
+
 ```yaml
 name: terraform-plan
 on:
-  pull_request:
-    paths: ["infra/terraform/**"]
+  pull_request:          # ★ paths で絞らない（訂正3）。必須チェックは「常に結果を返す」必要がある
+
+permissions:
+  contents: read
 
 jobs:
   terraform-plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
-      matrix: { env: [dev, staging, production] }
+      fail-fast: false
+      matrix:
+        include:           # ★ 環境ごとに資格情報を切り替える（訂正5）
+          - { env: dev,        token: TF_CLOUDFLARE_API_TOKEN,      account: CLOUDFLARE_ACCOUNT_ID }
+          - { env: staging,    token: TF_CLOUDFLARE_API_TOKEN,      account: CLOUDFLARE_ACCOUNT_ID }
+          - { env: production, token: TF_CLOUDFLARE_API_TOKEN_PROD, account: CLOUDFLARE_ACCOUNT_ID_PROD }
     permissions: { contents: read, pull-requests: write }
     env:
-      CLOUDFLARE_API_TOKEN:  '${{ secrets.TF_CLOUDFLARE_API_TOKEN }}'
-      AWS_ACCESS_KEY_ID:     '${{ secrets.R2_ACCESS_KEY_ID }}'
-      AWS_SECRET_ACCESS_KEY: '${{ secrets.R2_SECRET_ACCESS_KEY }}'
-      TF_VAR_account_id:     '${{ vars.CLOUDFLARE_ACCOUNT_ID }}'
+      CLOUDFLARE_API_TOKEN:  ${{ secrets[matrix.token] }}
+      TF_VAR_account_id:     ${{ vars[matrix.account] }}
+      AWS_ACCESS_KEY_ID:     ${{ secrets.R2_ACCESS_KEY_ID }}       # backend は常にアカウント①の R2
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_ENDPOINT_URL_S3:   ${{ vars.R2_S3_ENDPOINT }}            # ★ 訂正4
     steps:
       - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
-        with: { terraform_version_file: .terraform-version }
-      - run: terraform -chdir=infra/terraform/envs/${{ matrix.env }} init
-      - run: terraform -chdir=infra/terraform/envs/${{ matrix.env }} plan -no-color -out=tfplan
-      # plan結果をPRコメントに貼る（差分を人間の目に通す）
+        with: { fetch-depth: 0 }
+
+      # ★ 訂正3：変更が無ければ以降を飛ばし、ジョブ自体は success で終わらせる
+      - id: changed
+        run: |
+          if git diff --quiet "origin/${{ github.base_ref }}...HEAD" -- infra/terraform; then
+            echo "tf=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "tf=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ★ 訂正1：.terraform-version を読んで渡す
+      - id: tfver
+        if: steps.changed.outputs.tf == 'true'
+        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v4          # ★ 訂正2
+        if: steps.changed.outputs.tf == 'true'
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false                   # wrapper は出力と exit code を包むので切る
+
+      - if: steps.changed.outputs.tf == 'true'
+        run: terraform -chdir=infra/terraform/envs/${{ matrix.env }} init -input=false -lockfile=readonly
+      - if: steps.changed.outputs.tf == 'true'
+        run: terraform -chdir=infra/terraform/envs/${{ matrix.env }} plan -input=false -no-color -out=tfplan > /dev/null
+      # PR コメントには Plan 行とリソースアドレスだけを貼る（§3.1）
 ```
+
+> **fork からの PR には secrets が渡らない。** public リポジトリなので、fork PR ではこのジョブの init が必ず落ちる。
+> 1人開発のうちは実害がないが、**`pull_request_target` で回避しないこと**（公開リポジトリの典型的な権限昇格経路）。
+>
+> **#14 で決めること：PR の plan に production のトークンを渡してよいか。**
+> 上の形では、PR を出したブランチのコードが `TF_CLOUDFLARE_API_TOKEN_PROD` を持って走る。plan は読み取りだが、
+> §7 の「staging のワークフローから prod のトークンに手が届かない構造」とは緊張関係にある。
+> 選択肢は (a) このまま（1人開発・fork には渡らない）／(b) production の plan だけ `environment: production` を付けて
+> 承認を挟む（毎 PR で承認が要る）／(c) production の plan は PR では回さず、タグ時にだけ回す。
 
 **`terraform apply` は CI から自動実行しない。** 環境資源の作成/破壊は 🧑 人間が手元で（またはworkflow_dispatch＋承認で）実行する。理由：Cloudflareアカウント資源の誤destroyは復旧不能なものを含む（R2データ・D1データ）。**M0の段階で自動applyまで踏み込む利得より、事故のコストのほうが大きい。**
 

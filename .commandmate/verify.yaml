@@ -25,8 +25,11 @@
 #   2. check-deps.mjs      … 依存の向きを infra/scripts/dep-graph.mjs と照合し、
 #                            package.json と tsconfig references の両方の一致を要求する
 #
+# tf-fmt / tf-validate（2026-09-13 追加・#3 完了後）:
+#   .commandmate/scripts/check-terraform.sh を呼ぶ。資格情報を一切使わない（init -backend=false）。
+#   入っている terraform が .terraform-version と一致しなければ落ちる。ローカルは tfenv が要る。
+#
 # 【追加予定のゲート】対象ファイルが揃った時点で、人が ci.yml と同時に足す：
-#   - terraform fmt -check / terraform validate（Issue #3 完了後）
 #   - pnpm infra:sync --env staging --check  （Issue #13）
 version: 1
 gates:
@@ -44,6 +47,12 @@ gates:
     timeoutSec: 300
   - id: unit
     command: "pnpm test"
+    timeoutSec: 600
+  - id: tf-fmt
+    command: "pnpm check:tf-fmt"
+    timeoutSec: 120
+  - id: tf-validate
+    command: "pnpm check:tf-validate"
     timeoutSec: 600
 options:
   baseRef: origin/main

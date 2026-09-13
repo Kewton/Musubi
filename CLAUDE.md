@@ -58,7 +58,7 @@ terraform version     # .terraform-version（1.16.2）を tfenv がピンする
 ## 検証ゲート（誰が何を直すか）
 
 **合格の定義は [`.commandmate/verify.yaml`](.commandmate/verify.yaml) と `.github/workflows/ci.yml` の
-`lint-typecheck-unit` の2か所にあり、5段（deps / verify-parity / lint / typecheck / unit）が順序まで一致する。**
+`lint-typecheck-unit` の2か所にあり、7段（deps / verify-parity / lint / typecheck / unit / tf-fmt / tf-validate）が順序まで一致する。**
 
 | | 直せる人 | 理由 |
 |---|---|---|
@@ -68,9 +68,21 @@ terraform version     # .terraform-version（1.16.2）を tfenv がピンする
 - **ゲートの追加・削除は、人が `verify.yaml` と `ci.yml` を1コミットで同時に直す。**
 - ワーカーが `ci.yml` だけにゲートを足すと、`pnpm check:verify-parity` が落ちて PR はマージできない。
   **それが「人の手が要る」ことの合図である。** ワーカーは止まって人に返すこと。`verify.yaml` を直そうとしない。
-- `ci.yml` の `lint-typecheck-unit` の `run:` ステップには、直前に `# verify-gate: <id>` の目印が要る。
-  **目印の無い run ステップを足しても落ちる**（目印を付けずに足す抜け道を塞いである）。
+- `ci.yml` の `lint-typecheck-unit` で `run:` を持つステップには、**直前の1行**に目印が要る。
+  **目印の無い run ステップを足しても落ちる**（`- run:` 形式も `- name:` の次行に `run:` を書く形式も数える）。
+  - ゲートなら `# verify-gate: <id>`（verify.yaml の gate id と順序まで照合される）
+  - ゲートではない準備なら `# verify-setup: <理由>`（理由は必須。照合の対象外になる）
+  - 目印とステップの間に別のコメントを挟むと、目印として効かない
 - 照合するのは「どのゲートがどの順で走るか」まで。コマンドの文字列の一致までは見ない。
+  **だからゲートの中身は `.commandmate/scripts/` に1本だけ置き、verify.yaml と ci.yml の両方から同じものを呼ぶ**
+  （同じコマンドを2か所に書くと、中身だけがズレても parity check は気づかない）。
+
+### Terraform のゲート（tf-fmt / tf-validate）
+
+- `.commandmate/scripts/check-terraform.sh` が実体。**資格情報を一切使わない**（`init -backend=false`）
+- 入っている terraform が `.terraform-version` と一致しなければ落ちる。**ローカルでは tfenv が要る**
+- 検証用の作業領域は `.terraform-validate/`（ignore 済み）。実 apply 用の `.terraform/` とは分けてあるので、
+  実 backend で init 済みの環境ディレクトリでもゲートは落ちない
 
 ## git worktree で並列作業するとき
 
