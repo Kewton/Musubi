@@ -1,0 +1,17 @@
+{
+  // infra/scripts の TypeScript（Node で tsx から動く開発者向け CLI）を typecheck する。
+  // pnpm workspace の外なので turbo run typecheck は届かない。ルートの typecheck が tsc -p infra で呼ぶ。
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    // Worker ではなく Node で動く。workers-types ではなく @types/node を使う。
+    "lib": ["ES2023"],
+    "types": ["node"],
+    // 型を検査するだけで出力しない（実行は tsx）。出力しないので import は実在する .ts をそのまま書く。
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": ["scripts/**/*.ts"]
+}
