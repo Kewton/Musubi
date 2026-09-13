@@ -219,6 +219,15 @@ data-api が D1 / R2 / Queue を書き忘れても通るので、**#6・#8・#9 
 順序は「新しい置き場に登録 → ワークフローと手順書を切り替えて CI で確認 → 古いものを削除」。値は `.env` から標準入力で渡し、表示していない。
 `infra-plan.yml`・`04` §3/§3.1/§4/§5/§7・H-08 の表・`setup-github-secrets.sh`（置き場所の規則と、置いてはいけない場所に残っていないかの検査を内蔵）・`CLAUDE.md` を更新した。
 
+## 2026-09-14 追記：#49 — `terraform-plan` を必須チェックに追加
+
+| 項目 | 結果 |
+|---|---|
+| 追加の条件 | 「触らない PR」（#46・#47）と「触る PR」（#48）の両方で `terraform-plan` が success になることを確認済み |
+| 実行 | `protect-main.sh lint-typecheck-unit terraform-plan` |
+| 必須チェック | `["lint-typecheck-unit", "terraform-plan"]`。`terraform-plan` は GitHub Actions（app_id 15368）に結び付けられた |
+| 追加直後の試験 | **この記録を追加する PR 自体**を「Terraform を触らない PR」として通し、**管理者の bypass を使わずに**マージできることを確認する |
+
 ## 残っている判断・本人操作
 
 1. ~~**H-14 アカウント構成**~~ → **2026-09-12 決定済み**（案A・上記）。残る本人操作は**アカウント②の新規作成**（メール認証）。
