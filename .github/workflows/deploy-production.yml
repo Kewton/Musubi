@@ -1,0 +1,152 @@
+name: deploy-production
+# v* タグを production へ配る（04 §5）。deploy-staging.yml（04 §4）と同じ形で、env を production に読み替える。
+#   🧑 承認 → 前提の確認 → ⓪ 乖離チェック → build → ① D1 マイグレーション → ② deploy（data-api → gateway → host）→ ③ 貫通スモーク
+#
+# ── 起動 ──────────────────────────────────────────────────────────────
+# v タグの push と、v タグを選んだ手動実行（workflow_dispatch）だけ。ブランチからは配らない（前提の確認で落とす）。
+# ジョブは environment: production を宣言する。production 環境は v* タグからのデプロイだけを許し、
+# **必須レビュワー（Kewton）の承認があるまでジョブを始めない**。本番の Secret はこのジョブにしか届かない。
+# PR では起動しない。PR で production の資格情報に触れない（04 §3「production の plan を PR で回さない」）。
+#
+# ── 資格情報（CLAUDE.md「資格情報の置き場所」・04 §5）────────────────────────────
+# **production 環境の Secret**（リポジトリ全体には無い。v* タグ・承認必須のこのジョブからしか読めない）
+#     CLOUDFLARE_API_TOKEN_PROD / CLOUDFLARE_ACCOUNT_ID_PROD … ① ② だけ（アカウント②）。wrangler には CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID として渡す
+#     MUSUBI_PROBE_TOKEN                                  … ② の gateway と host（deploy-worker.ts が --secrets-file で Worker の secret として載せる）
+#                                                           と ③（SMOKE_PROBE_TOKEN として。X-Musubi-Probe に載せる）だけ
+#     SMOKE_BASE_URL                                      … ③ だけ（production の host の workers.dev のオリジン）
+# **リポジトリの Secret**（staging と同じ値）
+#     R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_S3_ENDPOINT … ⓪ だけ。backend（state の置き場）は production でもアカウント①の R2
+# **使わない**：TF_CLOUDFLARE_API_TOKEN_PROD（GitHub に無い）。このワークフローで terraform plan / apply を production に対して行わない（#4）
+#
+# ── public リポジトリなので（deploy-staging.yml と同じ規律）──────────────────────────
+# - 資格情報は、それを使うステップの env にだけ渡す。**ジョブの env に置かない**
+# - vars を使わない
+# - wrangler の出力をそのまま流さない。deploy-worker.ts がファイルに受け、workers.dev のホスト名を伏せた要約だけを出す
+# - MUSUBI_PROBE_TOKEN の値をコマンド行にもファイルにも残さない。deploy-worker.ts が一時ファイルに書いて wrangler に渡し、すぐ消す
+# - smoke に --base-url を使わない（pnpm がコマンド行を引数ごとログに出す）
+# - environment に url を書かない（デプロイの記録に載り、誰でも読める）
+#
+# この形は infra/scripts/deploy-worker.test.ts が確かめる（並び・資格情報の置き場所・起動条件）。
+on:
+  push: { tags: ['v*'] }
+  workflow_dispatch:
+
+# 取り消さない。配っている途中（migration の後・deploy の前など）で止めない。
+concurrency: { group: deploy-production, cancel-in-progress: false }
+
+# 読み取りだけ。Cloudflare へは Secret のトークンで書く（GITHUB_TOKEN は使わない）。
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 承認待ちの時間は含まない（承認されてからジョブが始まる）。smoke の再試行の上限（最悪 2分半）を含めた安全網
+    timeout-minutes: 20
+    # 🧑 必須レビュワーの承認待ちがここで入る。本番の Secret は production 環境にしか無いので、宣言しないと空になる
+    environment: production
+    steps:
+      # 値は渡さない。式の比較の結果（true / false）だけがこのステップに届く。
+      # 足りなければ何も配らずに落とす（配った後に smoke の宛先や secret が無いと気づくのを避ける）。
+      - name: 前提の確認（v タグであること・Secret が揃っていること）
+        env:
+          REF: ${{ github.ref }}
+          HAS_CLOUDFLARE_API_TOKEN_PROD: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD != '' }}
+          HAS_CLOUDFLARE_ACCOUNT_ID_PROD: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD != '' }}
+          HAS_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
+          HAS_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
+          HAS_R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT != '' }}
+          HAS_MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN != '' }}
+          HAS_SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL != '' }}
+        run: |
+          case "$REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "::error::production へ配るのは v タグだけ。手動実行でも v タグを選ぶ"
+              exit 1
+              ;;
+          esac
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN_PROD CLOUDFLARE_ACCOUNT_ID_PROD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_S3_ENDPOINT MUSUBI_PROBE_TOKEN SMOKE_BASE_URL; do
+            has="HAS_${name}"
+            if [ "${!has}" != true ]; then
+              echo "::error::${name} が空。Secret が未登録（R2_* はリポジトリの Secret、ほかは production 環境の Secret）"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .node-version, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # ── ⓪ デプロイ直前の乖離チェック（2026-09-13 決定・03 §3）─────────────────
+      # wrangler.jsonc の Terraform 由来の欄が production の実物（state）と一致しなければ、何も配らずに落とす。
+      # ★ setup-terraform に terraform_version_file という入力は無い（04 §3 訂正1）。読んで渡す
+      - id: tfver
+        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false # wrapper は出力と exit code を包むので切る
+      # 資格情報は tfstate の backend（R2）の3つだけ。Cloudflare のトークンは渡さない（terraform output には要らない）。
+      # ★ init の出力は stderr ごと捨てる。backend の endpoint URL（Account ID を含む）を出しうる
+      - name: ⓪ 乖離チェック（wrangler.jsonc ⇔ terraform output）
+        env:
+          CHECKPOINT_DISABLE: '1'
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL_S3: ${{ secrets.R2_S3_ENDPOINT }}
+        run: |
+          terraform -chdir=infra/terraform/envs/production init -input=false -lockfile=readonly -no-color > /dev/null 2>&1 \
+            || { echo "::error::terraform init に失敗した（詳細はログに出さない。手元で同じ手順を再現する）"; exit 1; }
+          pnpm infra:sync --env production --check
+
+      # host は **ビルドの時点で** env が決まる（apps/host/wrangler.jsonc 冒頭）。CLOUDFLARE_ENV を付けてビルドする。
+      - name: build（CLOUDFLARE_ENV=production）
+        env:
+          CLOUDFLARE_ENV: production
+        run: pnpm build
+
+      # ── ① D1 マイグレーション（デプロイより先。前方互換規律が前提 → docs/runbook/d1-migration.md §3・§4）──────
+      - name: ① D1 マイグレーション（CONTROL_DB）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --target migrate
+
+      # ── ② デプロイ：依存の末端から data-api → gateway → host（呼ばれる側を先に置く）──────────────
+      # --var GIT_SHA が host の /healthz の version になり、③ の --expect-sha がそれを照合する。
+      # gateway と host は MUSUBI_PROBE_TOKEN を secret として毎回載せる（deploy-worker.ts が --secrets-file で渡す。無ければ配らずに落ちる）
+      - name: ② deploy data-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --target data-api --sha "$GIT_SHA"
+      - name: ② deploy gateway
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
+          MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --target gateway --sha "$GIT_SHA"
+      - name: ② deploy host
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
+          MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --target host --sha "$GIT_SHA"
+
+      # ── ③ 貫通スモーク（03 §5）。落ちたらデプロイ失敗として扱う ──────────────────────
+      # 宛先と X-Musubi-Probe の値は production 環境の Secret から環境変数で渡す。smoke は URL も値も一切表示しない。
+      # 初回デプロイは workers.dev の経路ができるまで 404 が続くので、smoke は上限つきで待つ（smoke.ts の RETRY_POLICY）
+      - name: ③ 貫通スモーク（host → gateway → data-api → D1 / R2 / DO）
+        env:
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+          SMOKE_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm smoke --env production --expect-sha "$GIT_SHA"

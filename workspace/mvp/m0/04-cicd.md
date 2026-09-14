@@ -15,7 +15,7 @@
 | `.github/workflows/ci.yml` | PR / push to main | lint・typecheck・unit・PRタイトル検査 | なし |
 | `.github/workflows/infra-plan.yml` | PR（`infra/**` 変更時） | `terraform plan` を3環境ぶん実行しPRコメント | なし |
 | `.github/workflows/deploy-staging.yml` | push to `main` ／ 手動（`workflow_dispatch`。main のみ） | 乖離チェック → D1 migration → deploy → smoke | なし（自動） |
-| `.github/workflows/deploy-production.yml` | tag `v*` | D1 migration → deploy → smoke | 🧑 **required reviewer** |
+| `.github/workflows/deploy-production.yml` | tag `v*` ／ 手動（`workflow_dispatch`。v タグのみ） | 乖離チェック → D1 migration → deploy → smoke | 🧑 **required reviewer** |
 | `.github/workflows/rollback.yml` | 手動（`workflow_dispatch`） | 指定タグへ巻き戻し | 🧑 **required reviewer** |
 
 **required status checks（`main` 保護に登録するジョブ名）**
@@ -268,37 +268,92 @@ PR の段階では Cloudflare に何も配らない。`CLOUDFLARE_ENV=staging` �
 
 **§4 と同じ形**にする（Issue #16）。違うのは env と、起動・承認・資格情報の置き場所だけ。
 
-```yaml
-name: deploy-production
-on:
-  push: { tags: ["v*"] }
+**正本は `.github/workflows/deploy-production.yml`。** §3・§4 と同じ理由で、ここにワークフローの全文を複製しない。
+並び・資格情報の置き場所・起動条件・staging から届かないことは `infra/scripts/deploy-worker.test.ts` が確かめる。
 
-concurrency: { group: deploy-production, cancel-in-progress: false }
-
-permissions:
-  contents: read
-
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: production        # ← 🧑 required reviewer による承認待ちがここで入る
-    steps:
-      # staging（deploy-staging.yml・§4）と同一手順。env を production に読み替える
-      #   build     … CLOUDFLARE_ENV=production pnpm build（host は build 時に env が決まる。§4）
-      #   ① migrate … deploy-worker.ts --env production --target migrate（SQL の置き場と --config は staging と同じ）
-      #   ② deploy  … deploy-worker.ts --env production --target data-api → gateway → host（--sha <commit>）
-      #   ⓪ の乖離チェックも同じ形で `envs/production` と `--env production` に読み替える。
-      #      backend（state の置き場）は production でもアカウント①の R2 なので、R2 の資格情報は staging と同じ
-      #   最後に smoke --env production
-      #
-      # ★ ① ② のステップの env にだけ、次の2つを渡す（ジョブの env にしない。§4）。
-      #   この2つは **production 環境の Secret**（2026-09-14）。リポジトリ全体には置いていないので、
-      #   environment: production を宣言し、v* タグで起動し、Kewton が承認したこのジョブからしか読めない
-      #     CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}'
-      #     CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}'
-      # ★ production の host は X-Musubi-Probe が無いと /healthz の詳細を返さない。③ には SMOKE_PROBE_TOKEN も
-      #   production 環境の Secret から渡す（infra/scripts/smoke.ts 冒頭）
 ```
+🧑 承認        … environment: production。必須レビュワー（Kewton）が承認するまでジョブを始めない
+前提の確認     … v タグであること・使う Secret が空でないこと（値は渡さない。式で比べた true / false だけを渡す）
+install
+⓪ 乖離チェック … terraform -chdir=infra/terraform/envs/production init（出力は stderr ごと捨てる）→ pnpm infra:sync --env production --check
+build          … CLOUDFLARE_ENV=production pnpm build
+① migration    … deploy-worker.ts --env production --target migrate
+② deploy       … deploy-worker.ts --env production --target data-api → gateway → host（--sha <commit>）。gateway と host は MUSUBI_PROBE_TOKEN を secret として載せる
+③ smoke        … pnpm smoke --env production --expect-sha <commit>（宛先は SMOKE_BASE_URL、X-Musubi-Probe は SMOKE_PROBE_TOKEN）
+```
+
+§4 の ④（所要時間）は置かない。production には宣言した線が無く、起点のタグの push から承認までの人の待ちが入る。
+
+| 規則（§4 と違うところ） | 理由 |
+|---|---|
+| 起動は **`v*` タグの push** と、**v タグを選んだ `workflow_dispatch`** だけ。ブランチは前提の確認で落とす | `production` 環境のデプロイ元の制限（`v*` タグ）と揃える。手動実行は、承認を却下した・途中で落ちたタグの再実行に使う |
+| ジョブに **`environment: production`** を宣言する | 必須レビュワーの承認待ちがここで入る。本番の Secret は `production` 環境にしか無いので、宣言しないと空になる |
+| Cloudflare のトークンと Account ID は **`CLOUDFLARE_API_TOKEN_PROD` / `CLOUDFLARE_ACCOUNT_ID_PROD`**（アカウント②）を、wrangler には `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` として ① ② にだけ渡す | アカウント①（staging）のトークンはどのステップにも渡さない |
+| tfstate の backend（R2）の3つは staging と同じリポジトリの Secret を ⓪ にだけ渡す | backend（state の置き場）は production でもアカウント①の R2。⓪ に Cloudflare のトークンは要らない |
+| **`terraform plan` / `apply` を行わない**。`TF_CLOUDFLARE_API_TOKEN_PROD` を使わない | GitHub に置いていない。production への apply は人が手元から（#4・§3） |
+| `MUSUBI_PROBE_TOKEN` は ② の gateway と host、③ にだけ渡す | 下の「`/healthz` の合言葉」 |
+| `concurrency` は `deploy-production` で取り消さない | §4 と同じ。配っている途中で止めない |
+
+それ以外（資格情報は使うステップの `env` にだけ・`vars` を使わない・`environment` に `url` を書かない・wrangler を直接呼ばない・smoke に `--base-url` を使わない）は §4 と同じ。
+
+### `/healthz` の合言葉（`MUSUBI_PROBE_TOKEN`）（2026-09-14 決定）
+
+production の host と gateway は、`X-Musubi-Probe` が Worker の secret `MUSUBI_PROBE_TOKEN` と一致したときだけ `/healthz` の詳細を返す（`03` §5「セキュリティ上の注意」）。
+**secret の無い production の host は常に `{"ok":false}`（503）で、貫通スモークが通らない。**
+
+- 合言葉は **`production` 環境の Secret `MUSUBI_PROBE_TOKEN` の1か所だけ**に置く
+- **host と gateway へは、deploy のたびに `wrangler deploy --secrets-file` で載せる**（`infra/scripts/deploy-worker.ts`）。**手で `wrangler secret put` をしない**
+  - deploy-worker は、詳細を隠す env（`smoke.ts` の `PROBE_REQUIRED_ENVS`）の gateway と host を配るとき、環境変数 `MUSUBI_PROBE_TOKEN` を必須にする。
+    無い・ヘッダに載らない文字を含む・**32 文字未満**なら、wrangler を起動せずに exit 1（secret の無い production を配らない）
+  - 値は一時ディレクトリ（`$RUNNER_TEMP` の下・0700）のファイル（0600）に JSON で書き、wrangler が終わったらすぐ消す（失敗しても）。ログに出すのは secret の名前だけ。wrangler の子プロセスには環境変数として渡さない
+  - wrangler は secret を `env.MUSUBI_PROBE_TOKEN ("(hidden)")` と表示する。伏せる側でも値を持って伏せる
+  - `--secrets-file` は足し算で、ファイルに無い secret を消さない
+- 貫通スモークには **`SMOKE_PROBE_TOKEN`** として渡す（`--env production` では必須。`infra/scripts/smoke.ts` 冒頭）
+- 合言葉を変えるときは、Secret を更新してタグを打ち直す（または同じタグで手動実行する）。host と gateway に同じ値が同時に載る
+
+### 初回デプロイの経路の待ち（貫通スモークの再試行の上限を広げた）
+
+staging の初回デプロイ（2026-09-14）では、host を配った直後の貫通スモークが **4回続けて 404** になり、5回目（約22秒後）で成功した。
+新しい Worker の workers.dev の経路が有効になるまでの待ちで、当時の上限（最大5回・5秒間隔・総時間60秒）の**ぎりぎり**だった。
+production も初回デプロイなので、**上限つきのまま**広げた（`smoke.ts` の `RETRY_POLICY`。staging と共通）。
+
+| | 旧 | 新 |
+|---|---|---|
+| 試行の回数の上限 | 5 | **12** |
+| 試行の間の待ち | 5 秒 | **10 秒**（待てる幅 110 秒＝実測の約22秒の5倍） |
+| 総時間の上限 | 60 秒 | **150 秒** |
+
+- 定期ポーリングではない。ok になった時点で終わるので、平常は1リクエストのまま（`06` §6）
+- 待てる幅は `smoke.test.ts` が偽の時計で確かめる（110 秒 404 が続いた後に ok になれば exit 0）
+- 失敗したときでも §4 の「main merge → smoke green ≤ 10分」を 2分半しか削らない
+
+### staging から production の資格情報に手が届かない
+
+- `CLOUDFLARE_API_TOKEN_PROD` / `CLOUDFLARE_ACCOUNT_ID_PROD` / `MUSUBI_PROBE_TOKEN` は **`production` 環境の Secret** にだけある。
+  読めるのは `environment: production` を宣言したジョブだけで、そのジョブは `v*` タグからしか起動できず、承認が要る
+- `deploy-production.yml` 以外のワークフローは、`production` 環境を宣言せず、これらの名前を書かない。
+  `deploy-staging.yml` は `SMOKE_PROBE_TOKEN` も渡さない（`deploy-worker.test.ts` が全ワークフローを走査して確かめる）
+- `SMOKE_BASE_URL` は staging 環境と production 環境に同じ名前で別の値を置く。どちらが届くかはジョブが宣言した環境で決まる
+
+### PR での確かめ方（実環境に書き込まない）
+
+**2026-09-14・main = `11b7e5b`・wrangler 4.131.1**
+
+| 確かめたこと | 手順 | 結果 |
+|---|---|---|
+| 3つの Worker を production として配れる | `CLOUDFLARE_ENV=production` でビルドし、各 Worker で `wrangler deploy --dry-run --env production --var GIT_SHA:<sha>`（gateway と host は `--secrets-file` 付き・`WRANGLER_LOG=debug`） | 3つとも exit 0。Cloudflare API へのリクエストは 0 件。gateway と host の binding の表に `env.MUSUBI_PROBE_TOKEN ("(hidden)")`、`HEALTHZ_DETAIL: "probe"` |
+| deploy-worker が secret を一時ファイルで渡して消す | `deploy-worker.test.ts`（偽の wrangler と、実物の wrangler の `--dry-run`） | ファイルは 0600・置き場は 0700、終了後に残らない。値は出力に出ない |
+| ワークフローの構文 | `actionlint`（shellcheck 込み） | 指摘 0 |
+| 前提の確認がブランチ・`v` 以外のタグを落とす | `deploy-worker.test.ts` が前提の確認のスクリプトを bash で動かす | `refs/tags/v0.1.0` だけ exit 0 |
+
+### 前提（🧑 **最初のタグの前**）
+
+- [ ] `production` 環境に Secret **`SMOKE_BASE_URL`**（production の host の workers.dev のオリジン）を登録する
+- [ ] `production` 環境に Secret **`MUSUBI_PROBE_TOKEN`** を登録する。**32 文字以上・空白を含まない ASCII**（例：`openssl rand -hex 32`。値をどこにも貼らない）
+- [ ] `production` 環境の保護：デプロイ元が `v*` タグだけ・必須レビュワーが Kewton であることを確かめる
+- [x] アカウント②に workers.dev のサブドメインがある（2026-09-14 作成・API で確認済み）
+
+無ければ前提の確認で落ち、何も配らない。
 
 **リリース手順（人間の操作）**
 
@@ -308,6 +363,15 @@ git tag -a v0.1.0 -m "M0: platform baseline"
 git push origin v0.1.0
 # → GitHub Actions が起動 → 🧑 あなたに承認依頼が飛ぶ → Approve でデプロイ
 ```
+
+### 初回リリース（🧑 タグを打って承認し、監督側が結果を確かめる）
+
+- [ ] タグの push で起動し、**承認待ち（Waiting）で止まる**（承認するまで ⓪ 以降が走らない）
+- [ ] ⓪ の乖離チェックが production の state で通る
+- [ ] ① ② が `*_PROD` のトークンでアカウント②に書き込める
+- [ ] ③ が `--expect-sha` と `X-Musubi-Probe` 付きで green になる（初回の経路の待ちで何回目に通ったかを記録する）
+- [ ] ヘッダ無しの `/healthz` が `{"ok":true}` だけを返す
+- [ ] ログに workers.dev のホスト名・Account ID・合言葉が出ていない
 
 ---
 
@@ -370,9 +434,12 @@ Free の上限はアカウント単位。**M0で枠を食う主犯はユーザ�
 ## 7. Secrets の扱い
 
 - Worker の secrets（M2以降：LINE Channel Secret 等）は `wrangler secret put` で環境ごとに投入し、**GitHub Secrets からは CI 経由で流し込まない**（CIログ・Actions権限を経由させない）
-- M0時点で必要な secret は無い（`GIT_SHA` は `--var` で十分＝公開情報）
-- **本番の資格情報は `production` 環境の Secret にだけ置く**（2026-09-14）。`CLOUDFLARE_API_TOKEN_PROD` と
-  `CLOUDFLARE_ACCOUNT_ID_PROD` は、`environment: production` を宣言し、`v*` タグで起動し、Kewton が承認したジョブからしか読めない。
+- **例外：`MUSUBI_PROBE_TOKEN`（2026-09-14・#16 で決定）。** production の `/healthz` の合言葉だけは `production` 環境の Secret に1か所で置き、
+  deploy のたびに `--secrets-file` で host と gateway に載せる（§5）。host・gateway・貫通スモークの3か所で同じ値が要り、手で置くと食い違うため。
+  値はステップの env と一時ファイルにしか現れず、ログに出さない
+- M0時点で必要な secret はそれだけ（`GIT_SHA` は `--var` で十分＝公開情報）
+- **本番の資格情報は `production` 環境の Secret にだけ置く**（2026-09-14）。`CLOUDFLARE_API_TOKEN_PROD`・
+  `CLOUDFLARE_ACCOUNT_ID_PROD`・`MUSUBI_PROBE_TOKEN` は、`environment: production` を宣言し、`v*` タグで起動し、Kewton が承認したジョブからしか読めない。
   **リポジトリ全体の Secret にしない**：`pull_request` のワークフローは PR 側のブランチの定義で動くので、ワークフローを書き換えた PR から届いてしまう。
   `TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置かない（production への apply は手元から）
 - 企画書12章「Builder Containerに本番資格情報を一切置かない」の姿勢を、**CIランナーにも同じく適用する**：CIトークンは Workers Scripts / D1 / R2 の Edit のみ（🧑 H-02 ②）

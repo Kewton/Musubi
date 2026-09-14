@@ -37,6 +37,8 @@
 // **定期ポーリングしない**（06 §6：CI が無償枠を食う）。ok になった時点で終わる。
 // 再試行するのはデプロイ直後の伝播待ちで直り得る失敗（届かない・想定外のステータス・version の不一致・checks の ng）だけで、
 // 回数と総時間に上限を置く（RETRY_POLICY）。設定の誤り（JSON でない・形・env）は待っても直らないので、1回で落とす。
+// 上限は初回デプロイの待ちに合わせてある（2026-09-14・Issue #16）。新しい Worker の workers.dev の経路が有効になるまで
+// 404 が続く（staging の初回デプロイでは 4回続けて 404、5回目・約22秒後に成功）。production も初回デプロイなので、その5倍まで待つ。
 //
 // ── 安全面 ──────────────────────────────────────────────────────────────
 //
@@ -94,12 +96,18 @@ export interface RetryPolicy {
   readonly deadlineMs: number;
 }
 
-/** 最悪でも 5 リクエスト・60 秒で終わる。deploy-staging の「merge → smoke green ≤ 10分」（04 §4）を削らない幅にしてある。 */
+/**
+ * 最悪でも 12 リクエスト・150 秒で終わる。
+ *   - 待てる幅：試行の間の待ちが 11回 × 10 秒 = 110 秒。staging の初回デプロイで経路ができるまでの待ち（約22秒）の5倍
+ *     （smoke.test.ts が偽の時計で確かめる）
+ *   - 上限：deploy-staging の「merge → smoke green ≤ 10分」（04 §4）を、失敗したときでも 2分半しか削らない
+ * 定期ポーリングではない。ok になった時点で終わるので、平常のデプロイは1リクエストのまま。
+ */
 export const RETRY_POLICY: RetryPolicy = {
-  maxAttempts: 5,
-  retryIntervalMs: 5_000,
+  maxAttempts: 12,
+  retryIntervalMs: 10_000,
   requestTimeoutMs: 10_000,
-  deadlineMs: 60_000,
+  deadlineMs: 150_000,
 };
 
 /** 値を含まない、そのまま利用者へ見せてよい失敗。 */

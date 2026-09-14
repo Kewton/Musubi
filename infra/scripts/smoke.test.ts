@@ -3,7 +3,8 @@
 //   1. 契約：checks のキーの並びとパスが host の Worker の contract と一致し、package.json の smoke がこのファイルを指す
 //   2. 判定（judge）：各層の失敗を観測の形で与え、どの層で切れたかを1行で言い分ける
 //   3. 各層の失敗を再現するローカルの HTTP サーバに CLI を向ける（届かない・タイムアウト・想定外のステータス・HTML・checks の ng）
-//   4. 1回だけ・上限つき：ok なら1リクエストで終わる。再試行は伝播待ちで直り得る失敗だけで、回数と総時間の上限で止まる
+//   4. 1回だけ・上限つき：ok なら1リクエストで終わる。再試行は伝播待ちで直り得る失敗だけで、回数と総時間の上限で止まる。
+//      既定の上限は、初回デプロイで workers.dev の経路ができるまでの 404 を待ちきる幅にしてある（Issue #16）
 //   5. 宛先の URL を出さない：出力とエラーのどこにも、宛先のホスト名・ポート・URL として渡した値が混ざらない
 //   6. X-Musubi-Probe（Issue #55）：SMOKE_PROBE_TOKEN をヘッダにだけ載せ、出力のどこにも出さない。
 //      --env production では必須で、無ければ判定を始めずに exit 1
@@ -577,10 +578,34 @@ describe("1回だけ・上限つき（定期ポーリングしない）", () => 
     );
   });
 
-  it("RETRY_POLICY は「デプロイ後に1回」の範囲に収まる（最大 5 リクエスト・60 秒）", () => {
-    expect(RETRY_POLICY.maxAttempts).toBeLessThanOrEqual(5);
-    expect(RETRY_POLICY.deadlineMs).toBeLessThanOrEqual(60_000);
+  it("既定の RETRY_POLICY：初回デプロイの経路ができるまでの 404 が、staging の実測（約22秒）の5倍続いても待ちきる", async () => {
+    // staging の初回デプロイ（2026-09-14）では、host を配った直後に 4回続けて 404 になり、5回目・約22秒後に成功した。
+    // production も初回デプロイなので、その5倍の間 404 が続く場合を、時計だけを進めて再現する（1回の GET に 1 秒掛かる）
+    const routeReadyAt = 5 * 22_000;
+    const clock = fakeClock();
+    const run = await smoke(["--env", "dev", "--expect-sha", SHA], {
+      env: { SMOKE_BASE_URL: "https://smoke.invalid" },
+      policy: RETRY_POLICY,
+      now: clock.now,
+      sleep: clock.sleep,
+      fetch: async () => {
+        clock.advance(1_000);
+        return clock.now() <= routeReadyAt
+          ? new Response("not found", { status: 404, headers: { "content-type": "text/plain" } })
+          : Response.json(HEALTHY);
+      },
+    });
+    expect(run.code, run.all).toBe(EXIT_OK);
+    expect(run.out.filter((line) => line.includes("想定外の HTTP ステータス 404"))).toHaveLength(run.requests - 1);
+    expect(clock.now()).toBeGreaterThan(routeReadyAt);
+  });
+
+  it("RETRY_POLICY は「デプロイ後に1回」の範囲に収まる（最大 12 リクエスト・150 秒。定期ポーリングにしない）", () => {
+    expect(RETRY_POLICY.maxAttempts).toBeLessThanOrEqual(12);
+    expect(RETRY_POLICY.deadlineMs).toBeLessThanOrEqual(150_000);
     expect(RETRY_POLICY.requestTimeoutMs).toBeLessThan(RETRY_POLICY.deadlineMs);
+    // 待てる幅（試行の間の待ちの合計）が、総時間の上限の中に収まる
+    expect((RETRY_POLICY.maxAttempts - 1) * RETRY_POLICY.retryIntervalMs).toBeLessThan(RETRY_POLICY.deadlineMs);
   });
 });
 

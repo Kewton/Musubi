@@ -9,7 +9,7 @@
 //   --target host      … 同（apps/host で）。host は **CLOUDFLARE_ENV=<env> でビルドした出力**を配る（apps/host/wrangler.jsonc 冒頭）。
 //                        別の env でビルドした出力なら wrangler が食い違いで落とす
 //
-// 並び（migrate → data-api → gateway → host → smoke）はワークフローが持つ（.github/workflows/deploy-staging.yml）。
+// 並び（migrate → data-api → gateway → host → smoke）はワークフローが持つ（.github/workflows/deploy-staging.yml・deploy-production.yml）。
 // --sha は deploy に必須。host の /healthz の version になり、貫通スモークの --expect-sha がそれを照合する。
 // wrangler が exit 0 なら exit 0、それ以外（引数の誤り・起動できない も含む）は exit 1。
 //
@@ -30,13 +30,29 @@
 //     /accounts/<id>/ や dash.cloudflare.com/<id>/ を出しうる。Secret の値は GitHub もマスクするが、文字列の一致だけなので伏せる側でも持つ
 //   - ANSI エスケープは伏せる前に取り除く。色の切り替えがホスト名の途中に入ると一致しなくなり、OSC 8 のリンクは URL を運ぶ
 // 行頭（空白の後を含む）の `::` は崩す。GitHub Actions のワークフローコマンドとして解釈させない。
+//
+// ── Worker の secret（production の host と gateway の MUSUBI_PROBE_TOKEN）──────────────────────
+//
+// production の host と gateway は、X-Musubi-Probe が secret MUSUBI_PROBE_TOKEN と一致したときだけ /healthz の詳細を返す
+// （03 §5「セキュリティ上の注意」）。secret の無い production の host は常に {"ok": false}（503）になり、貫通スモークが通らない。
+// だから **詳細を隠す env（smoke.ts の PROBE_REQUIRED_ENVS）の gateway と host を配るときは、毎回 secret を一緒に載せる**
+// （2026-09-14・Issue #16 の決定。手で wrangler secret put をしない）。
+//   - 値は同じ名前の環境変数から読む。CI では **production 環境の Secret** MUSUBI_PROBE_TOKEN を、そのステップの env にだけ渡す
+//   - 無ければ wrangler を起動せずに exit 1（secret の無い production を配らない）。ヘッダに載らない文字（smoke.ts と同じ規則）と、
+//     短すぎる値（PROBE_TOKEN_MIN_LENGTH 未満）も弾く。値はエラーにも出さない
+//   - 値は一時ディレクトリ（0700）の中のファイル（0600）に JSON で書き、wrangler deploy --secrets-file に渡し、
+//     wrangler が終わったらすぐに消す（成功しても失敗しても）。ログに出すのは secret の名前だけ
+//   - wrangler の子プロセスには、この環境変数を渡さない（ファイルで渡す）
+//   - wrangler は secret の値を "(hidden)" と表示するが、伏せる側でも値を持って伏せる（上の Account ID と同じ）
+//   - --secrets-file は足し算で、ファイルに無い secret を消さない（wrangler 4.131.1 の deploy --help）
 import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync, readFileSync, realpathSync } from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { PROBE_REQUIRED_ENVS } from "./smoke.ts";
 import { ENVS, type Env } from "./sync-bindings.ts";
 
 export const TARGETS = ["migrate", "data-api", "gateway", "host"] as const;
@@ -54,6 +70,15 @@ export const WORKER_DIRS: Readonly<Record<WorkerTarget, string>> = {
 export const MIGRATION_CONFIG = "packages/data-api/wrangler.jsonc";
 export const MIGRATION_DATABASE = "CONTROL_DB";
 
+/** X-Musubi-Probe と照合する Worker の secret。apps/host/src/worker/contract.ts・apps/gateway/src/contract.ts の PROBE_TOKEN_SECRET と同じ。 */
+export const PROBE_TOKEN_SECRET = "MUSUBI_PROBE_TOKEN";
+
+/** /healthz の詳細を隠す Worker（wrangler.jsonc に vars.HEALTHZ_DETAIL を持つもの）。詳細を隠す env ではこれらに secret を載せる。 */
+export const PROBE_TARGETS: readonly WorkerTarget[] = ["gateway", "host"];
+
+/** MUSUBI_PROBE_TOKEN の長さの下限。短い値は総当たりで当たる（例：`openssl rand -hex 32` は 64 文字） */
+export const PROBE_TOKEN_MIN_LENGTH = 32;
+
 export const EXIT_OK = 0;
 export const EXIT_NG = 1;
 
@@ -66,8 +91,15 @@ export interface WranglerCall {
   readonly kind: "migrate" | "deploy";
   /** wrangler を動かすディレクトリ（リポジトリルートからの相対パス。"." は直下） */
   readonly cwd: string;
-  /** wrangler に渡す引数 */
+  /** wrangler に渡す引数（--secrets-file を除く。一時ファイルのパスは動かすときに決まる） */
   readonly args: readonly string[];
+  /** 一緒に載せる Worker の secret の名前。値は同じ名前の環境変数から読み、--secrets-file で渡す */
+  readonly secrets: readonly string[];
+}
+
+/** 純粋関数。target と env から、配るときに載せる Worker の secret の名前を決める。 */
+export function secretsFor(target: Target, env: Env): readonly string[] {
+  return target !== "migrate" && PROBE_TARGETS.includes(target) && PROBE_REQUIRED_ENVS.includes(env) ? [PROBE_TOKEN_SECRET] : [];
 }
 
 /** 純粋関数。target と env から wrangler の呼び方を決める。 */
@@ -78,12 +110,46 @@ export function wranglerCall(target: Target, env: Env, sha: string | undefined):
       kind: "migrate",
       cwd: ".",
       args: ["d1", "migrations", "apply", MIGRATION_DATABASE, "--env", env, "--config", MIGRATION_CONFIG, "--remote"],
+      secrets: [],
     };
   }
   if (sha === undefined) {
     throw new DeployError(`--target ${target} には --sha が要る（host の /healthz の version になり、smoke の --expect-sha が照合する）`);
   }
-  return { kind: "deploy", cwd: WORKER_DIRS[target], args: ["deploy", "--env", env, "--var", `GIT_SHA:${sha}`] };
+  return {
+    kind: "deploy",
+    cwd: WORKER_DIRS[target],
+    args: ["deploy", "--env", env, "--var", `GIT_SHA:${sha}`],
+    secrets: secretsFor(target, env),
+  };
+}
+
+/**
+ * 載せる secret の値を環境変数から読む。無い・空・ヘッダに載らない文字・短すぎる値は、wrangler を起動する前に落とす。
+ * 値はエラーにも出さない。
+ */
+export function readSecrets(names: readonly string[], env: Readonly<Record<string, string | undefined>>): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const name of names) {
+    const value = env[name];
+    if (value === undefined || value === "") {
+      throw new DeployError(
+        `環境変数 ${name} が要る（この env の Worker は secret ${name} が無いと /healthz の詳細を返さず、貫通スモークが通らない。` +
+          "CI では production 環境の Secret から渡す）。wrangler を起動せずに止める",
+      );
+    }
+    // X-Musubi-Probe に載せる値。smoke.ts の SMOKE_PROBE_TOKEN と同じく、空白を含まない表示可能な ASCII だけ
+    if (!/^[\x21-\x7e]+$/.test(value)) {
+      throw new DeployError(`${name} にヘッダに載せられない文字（空白・改行・非 ASCII）がある（値は表示しない）`);
+    }
+    if (value.length < PROBE_TOKEN_MIN_LENGTH) {
+      throw new DeployError(
+        `${name} が短すぎる（${PROBE_TOKEN_MIN_LENGTH} 文字以上にする。例：openssl rand -hex 32。値も長さも表示しない）`,
+      );
+    }
+    values[name] = value;
+  }
+  return values;
 }
 
 // ── 伏せる ─────────────────────────────────────────────────────────────────
@@ -98,14 +164,19 @@ const ACCOUNT_ID_SHAPE = /\b[0-9a-f]{32}\b/gi;
 
 export const REDACTED_HOST = "<伏せた>.workers.dev";
 export const REDACTED_ACCOUNT = "<伏せた:account>";
+export const REDACTED_SECRET = "<伏せた:secret>";
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI, "");
 }
 
-/** 1行を伏せる。accountId は環境変数 CLOUDFLARE_ACCOUNT_ID の値（あれば）。 */
-export function redact(line: string, accountId?: string): string {
+/** 1行を伏せる。accountId は環境変数 CLOUDFLARE_ACCOUNT_ID の値（あれば）、secrets は載せた Worker の secret の値。 */
+export function redact(line: string, accountId?: string, secrets: readonly string[] = []): string {
   let out = stripAnsi(line);
+  // secret を先に伏せる（Account ID の形をした値でも、secret として伏せたことが読めるように）
+  for (const secret of secrets) {
+    if (secret.length >= 8) out = out.split(secret).join(REDACTED_SECRET);
+  }
   // 短すぎる値で伏せると、関係の無い文字列まで崩す。Account ID は 32 桁
   if (accountId !== undefined && accountId.length >= 8) out = out.split(accountId).join(REDACTED_ACCOUNT);
   return out.replace(ACCOUNT_ID_SHAPE, REDACTED_ACCOUNT).replace(WORKERS_DEV_HOST, REDACTED_HOST);
@@ -163,7 +234,7 @@ export const SUMMARY: Readonly<Record<WranglerCall["kind"], readonly SummaryRule
 };
 
 /** 成功したときの要約。許した行だけを、伏せてから返す。 */
-export function summarize(kind: WranglerCall["kind"], text: string, accountId?: string): string[] {
+export function summarize(kind: WranglerCall["kind"], text: string, accountId?: string, secrets: readonly string[] = []): string[] {
   const rules = SUMMARY[kind];
   const picked: string[] = [];
   let continuing = false;
@@ -176,12 +247,12 @@ export function summarize(kind: WranglerCall["kind"], text: string, accountId?: 
     continuing = rule?.continuation === true;
     if (rule !== undefined) picked.push(line);
   }
-  return picked.map((line) => neutralize(redact(line, accountId)));
+  return picked.map((line) => neutralize(redact(line, accountId, secrets)));
 }
 
 /** 失敗したときの全文。伏せてから返す。 */
-export function failureLines(text: string, accountId?: string): string[] {
-  return linesOf(text).map((line) => neutralize(redact(line, accountId)));
+export function failureLines(text: string, accountId?: string, secrets: readonly string[] = []): string[] {
+  return linesOf(text).map((line) => neutralize(redact(line, accountId, secrets)));
 }
 
 // ── CLI ─────────────────────────────────────────────────────────────────
@@ -189,7 +260,10 @@ export function failureLines(text: string, accountId?: string): string[] {
 export interface CliIo {
   /** リポジトリルート */
   root: string;
-  /** 子プロセスへ渡す環境変数。CLOUDFLARE_ACCOUNT_ID（伏せる値）と RUNNER_TEMP（--log-dir の既定）もここから読む */
+  /**
+   * 子プロセスへ渡す環境変数。CLOUDFLARE_ACCOUNT_ID（伏せる値）、RUNNER_TEMP（--log-dir と secret の一時ファイルの置き場の既定）、
+   * 載せる Worker の secret（MUSUBI_PROBE_TOKEN。子プロセスには渡さない）もここから読む
+   */
   env: Readonly<Record<string, string | undefined>>;
   out: (line: string) => void;
   err: (line: string) => void;
@@ -207,6 +281,8 @@ const USAGE = `usage: pnpm exec tsx infra/scripts/deploy-worker.ts --env <${ENVS
   --sha <sha>        deploy に必須。--var GIT_SHA:<sha> で渡す（7〜40 桁の 16 進）
   --log-dir <dir>    wrangler の出力を受けるファイルの置き場。既定は $RUNNER_TEMP、無ければ OS の一時ディレクトリ
 
+${PROBE_REQUIRED_ENVS.join(" / ")} の ${PROBE_TARGETS.join(" / ")} は、環境変数 ${PROBE_TOKEN_SECRET} の値を secret として一緒に載せる（必須）。
+値は一時ファイルに書いて --secrets-file で渡し、wrangler が終わったらすぐ消す。値は一切表示しない。
 wrangler の出力はファイルに受け、ログには workers.dev のホスト名と Account ID を伏せた要約だけを出す（失敗したときは伏せた全文）。
 wrangler が exit 0 なら exit ${EXIT_OK}、それ以外は exit ${EXIT_NG}。`;
 
@@ -275,18 +351,23 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   const env = values.env;
   const target = values.target;
   const call = wranglerCall(target, env, sha);
+  const secrets = readSecrets(call.secrets, io.env);
 
-  const logDir = resolve(values["log-dir"] ?? io.env["RUNNER_TEMP"] ?? tmpdir());
+  const tempBase = io.env["RUNNER_TEMP"] ?? tmpdir();
+  const logDir = resolve(values["log-dir"] ?? tempBase);
   const logPath = join(logDir, `deploy-worker-${env}-${target}.log`);
   const accountId = io.env["CLOUDFLARE_ACCOUNT_ID"];
+  const secretValues = Object.values(secrets);
   const label = `${target}（env=${env}）`;
 
-  io.out(`deploy-worker: ${label}: wrangler ${call.args.join(" ")}（${call.cwd}）`);
-  const code = await runWrangler(io, call, logPath);
+  // 一時ファイルのパスは毎回変わるので、載せる secret の名前だけを出す
+  const shownArgs = [...call.args, ...(call.secrets.length === 0 ? [] : ["--secrets-file", `<一時ファイル: ${call.secrets.join(", ")}>`])];
+  io.out(`deploy-worker: ${label}: wrangler ${shownArgs.join(" ")}（${call.cwd}）`);
+  const code = await runWrangler(io, call, logPath, secrets, resolve(tempBase));
   const text = readFileSync(logPath, "utf8");
 
   if (code === 0) {
-    const lines = summarize(call.kind, text, accountId);
+    const lines = summarize(call.kind, text, accountId, secretValues);
     io.out(`deploy-worker: wrangler の出力は ${logPath} に受けた。ここには workers.dev のホスト名と Account ID を伏せた要約だけを出す`);
     if (lines.length === 0) io.out("  （要約に当たる行が無い。wrangler の出力の形が変わった可能性がある）");
     for (const line of lines) io.out(`  ${line}`);
@@ -295,23 +376,44 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   }
 
   io.out(`deploy-worker: wrangler が exit ${code} で終わった。出力（${logPath}）の全文を、workers.dev のホスト名と Account ID を伏せて出す`);
-  for (const line of failureLines(text, accountId)) io.out(`  ${line}`);
+  for (const line of failureLines(text, accountId, secretValues)) io.out(`  ${line}`);
   io.out(`deploy-worker: NG  ${label}`);
   return EXIT_NG;
 }
 
-/** wrangler を1回動かし、標準出力と標準エラーを logPath に受ける。exit code を返す（シグナルで終われば 1）。 */
-async function runWrangler(io: CliIo, call: WranglerCall, logPath: string): Promise<number> {
+/**
+ * wrangler を1回動かし、標準出力と標準エラーを logPath に受ける。exit code を返す（シグナルで終われば 1）。
+ * secrets があれば tempBase の下の一時ディレクトリにファイルで書いて --secrets-file で渡し、wrangler が終わったら消す。
+ */
+async function runWrangler(
+  io: CliIo,
+  call: WranglerCall,
+  logPath: string,
+  secrets: Readonly<Record<string, string>>,
+  tempBase: string,
+): Promise<number> {
   const [command, ...prefix] = io.wrangler;
   if (command === undefined) throw new DeployError("wrangler を起動するコマンドが無い");
+  // 載せる secret の環境変数は子プロセスに渡さない（ファイルで渡す）
+  const childEnv: Record<string, string | undefined> = { ...io.env, FORCE_COLOR: "0" };
+  delete childEnv[PROBE_TOKEN_SECRET];
   mkdirSync(dirname(logPath), { recursive: true });
   const fd = openSync(logPath, "w");
+  let secretsDir: string | undefined;
   try {
+    const args = [...call.args];
+    if (call.secrets.length > 0) {
+      // mkdtemp は 0700 で作る。ファイルは 0600・既存なら失敗（wx）
+      secretsDir = mkdtempSync(join(tempBase, "deploy-worker-secrets-"));
+      const secretsFile = join(secretsDir, "secrets.json");
+      writeFileSync(secretsFile, JSON.stringify(secrets), { mode: 0o600, flag: "wx" });
+      args.push("--secrets-file", secretsFile);
+    }
     return await new Promise<number>((done, fail) => {
-      const child = spawn(command, [...prefix, ...call.args], {
+      const child = spawn(command, [...prefix, ...args], {
         cwd: join(io.root, call.cwd),
         // 色を切る（伏せる前に ANSI も落とすが、出さないに越したことはない）。stdin を渡さない：確認は非対話の既定値で進む
-        env: { ...io.env, FORCE_COLOR: "0" },
+        env: childEnv,
         stdio: ["ignore", fd, fd],
       });
       child.on("error", (e) => {
@@ -322,6 +424,8 @@ async function runWrangler(io: CliIo, call: WranglerCall, logPath: string): Prom
     });
   } finally {
     closeSync(fd);
+    // 成功しても失敗しても、wrangler が終わったらすぐ消す
+    if (secretsDir !== undefined) rmSync(secretsDir, { recursive: true, force: true });
   }
 }
 

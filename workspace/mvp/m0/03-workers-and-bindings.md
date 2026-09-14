@@ -296,7 +296,8 @@ gateway は `env.DATA_API.fetch()` で中継し自分の結果を足す、host �
 
 - **隠すのは host と gateway の両方。** どちらも workers.dev でインターネットから届く。data-api は外部ルートを持たないので隠さない
 - 隠した応答に `service`・`env`・`version`・`checks`・`elapsed_ms` を載せない（エラーの文言も載らない）。HTTP ステータスの意味は変えない。404 / 405 はそのまま
-- 照合する値は **wrangler の secret `MUSUBI_PROBE_TOKEN`**。`wrangler.jsonc`（vars）にもリポジトリにも CI ログにも出さない。**host と gateway に同じ値を置く**
+- 照合する値は **Worker の secret `MUSUBI_PROBE_TOKEN`**。`wrangler.jsonc`（vars）にもリポジトリにも CI ログにも出さない。**host と gateway に同じ値を置く**。
+  値の正本は GitHub の **`production` 環境の Secret `MUSUBI_PROBE_TOKEN`** で、production の CD が deploy のたびに host と gateway へ載せる（下の注・`04` §5）
 - 比較は時間一定：両方を SHA-256 にしてから `crypto.subtle.timingSafeEqual` で比べる（長さの違いも時間に出ない）。
   Workers 固有の API なので adapter（`apps/host/src/worker/cloudflare.ts`・`apps/gateway/src/cloudflare.ts`）に置き、詳細を返すかの判定（`disclose`）は `healthz.ts` が持つ
 - **閉じる側に倒す。** `HEALTHZ_DETAIL` が `"public"` 以外（未設定・書き違い）なら隠す。secret が無い（空も含む）production は、ヘッダが付いていても詳細を返さない
@@ -314,8 +315,11 @@ gateway は `env.DATA_API.fetch()` で中継し自分の結果を足す、host �
 （`{"ok":true}` では `--expect-sha` を確かめられない。確かめられない緑を出さない）。値は出力に出さず、平文の http の宛先（loopback 以外）には載せない。
 CI では **`production` 環境の Secret** から渡す（リポジトリ全体の Secret にしない。CLAUDE.md「資格情報の置き場所」）。
 
-> 実物の secret の登録（`wrangler secret put MUSUBI_PROBE_TOKEN --env production` を host と gateway に）と、
-> `deploy-production.yml` で `SMOKE_PROBE_TOKEN` を渡す配線は、production の CD の Issue で行う。
+> **secret の置き方（2026-09-14・#16 で決定）**：合言葉は **`production` 環境の Secret `MUSUBI_PROBE_TOKEN` の1か所だけ**に置く。
+> `deploy-production.yml` が、host と gateway へは `wrangler deploy --secrets-file` で**毎回**載せ（`infra/scripts/deploy-worker.ts` が一時ファイルに書いてすぐ消す）、
+> 貫通スモークには `SMOKE_PROBE_TOKEN` として渡す。**手で `wrangler secret put` をしない**（値が2か所に分かれ、次の deploy で上書きされる）。
+> 値が無い・ヘッダに載らない文字を含む・32 文字未満なら、host と gateway を配らずに落ちる（secret の無い production は常に `{"ok":false}` になるため）。
+> 登録は 🧑 が最初のタグの前に行う（`04` §5「前提」）。
 > workerd 上の受入試験（ヘッダ無し・誤った値・正しい値、secret が無い production）は `apps/host/src/worker/index.test.ts`・`apps/gateway/src/index.test.ts`・`infra/scripts/smoke.test.ts` にある。
 
 ### 無償枠の実測（`06` §7 の #1・#2・#4 を潰す）
