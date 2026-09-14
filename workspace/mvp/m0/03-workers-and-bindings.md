@@ -136,7 +136,8 @@ Free は **1リクエストあたり CPU 10ms**。TanStack Start の SSR はこ�
 
 **副次効果が大きい**：日次リクエスト予算をページロードではなく **API呼び出しだけに使える**。TTSU（企画書16章）の観点でも、シェルがエッジキャッシュから即返るのは有利。
 
-> **要確認**（→ `06` §7 #4）：Workers Static Assets へのリクエストが 100k/日 を消費しないことを Analytics で実測確認する。
+> **確認済み**（→ `06` §7 #4・§7.1。2026-09-14 実測）：staging の host で `/` と深いリンクを計 20 回（2回）叩き、Worker の起動は 0 回。Workers Static Assets へのリクエストは 100k/日 を消費しない。
+>
 > **要確認**：TanStack Start × `@cloudflare/vite-plugin` の SPAモードでの出力パスと `assets` 設定の統合方法は、採用バージョンの公式テンプレートに従う（バージョン差が大きい）。M1で SSR が必要になったら、その時に Workers Paid へ昇格する（`06` §5 P-1）。
 
 ---
@@ -306,36 +307,37 @@ CI では **`production` 環境の Secret** から渡す（リポジトリ全体
 > `deploy-production.yml` で `SMOKE_PROBE_TOKEN` を渡す配線は、production の CD の Issue で行う。
 > workerd 上の受入試験（ヘッダ無し・誤った値・正しい値、secret が無い production）は `apps/host/src/worker/index.test.ts`・`apps/gateway/src/index.test.ts`・`infra/scripts/smoke.test.ts` にある。
 
-### 無償枠の実測をスモークに埋め込む（`06` §7 の #1・#2 を潰す）
+### 無償枠の実測（`06` §7 の #1・#2・#4 を潰す）
 
-M0のスモークは「つながっているか」だけでなく、**Free の上限に対する余裕**も測る。各Workerが自分の CPU 時間を応答に載せる：
+M0 では「つながっているか」だけでなく、**Free の上限に対する余裕**も測る。ただし**デプロイ直後の貫通スモークには入れない**。
+スモークと同じ宛先（staging の host）に対して、別の計測スクリプトを手元から回す（2026-09-14・#25）。
 
-```ts
-// 各Workerで
-const t0 = performance.now();
-// ... 処理 ...
-const cpu_ms = performance.now() - t0;   // ※wall clock。CPU時間の近似として記録する
+```bash
+pnpm exec tsx --env-file=.env infra/scripts/measure-free-tier.ts      # 送って、Analytics に反映されるのを待って、判定する
 ```
 
-```json
-{
-  "service": "host",
-  "checks": { "gateway": "ok", "data_api": "ok", "d1": "ok", "r2": "ok", "do": "ok" },
-  "budget": {
-    "host_ms": 1.2, "gateway_ms": 0.8, "data_api_ms": 4.1,
-    "chain_total_ms": 6.1,
-    "limit_ms": 10
-  }
-}
-```
+**当初の案（各 Worker が `performance.now()` の差を応答に載せる）は採らなかった。**
 
-**これで確定させたい2点**（`06` §7）
-1. **CPU時間は各Worker独立か、チェーン合算か** — 合算なら `chain_total_ms` が 10ms 上限に対する実数になる。3ホップで余裕がどれだけあるかがここで分かる
-2. **Service Binding 呼び出しが課金リクエストとして別カウントされるか** — スモークを既知の回数だけ叩き、Workers Analytics のリクエスト数と突き合わせる（1回のスモークで +1 か +3 か）
+- **CPU 時間は Worker の中では測れない。** Workers の時計（`performance.now`・`Date.now`）は I/O のときにしか進まないので、差を取っても CPU 時間にならない。
+  **正は Workers Analytics（GraphQL）の invocation の cpuTime** である（データセットと欄と出典は `06` §7.1）
+- **Analytics は数分遅れて反映される。** スモークで反映を待つと、`04` §4 の「merge → smoke green ≤ 10分」を削る。だからスモークは今のまま、つながっているかだけを見る
 
-> 実測結果は `05-acceptance.md` の清算表と `06` §8 に記録する。**「たぶん大丈夫」で M1 に進まない。**
+**計測スクリプトがすること**（詳細は `infra/scripts/measure-free-tier.ts` の冒頭）
 
-> ⚠️ `performance.now()` は Workers では実CPU時間ではなく、I/O待ちを含まない近似になる。**厳密なCPU時間は Workers Analytics / Workers Logs 側の値を正とする。** 応答に載せる値は「異常に大きくないか」の早期検知用と割り切る。
+| 段 | 内容 |
+|---|---|
+| 送る | staging の host に GET だけ。`/` と深いリンクを 10 回ずつ（ブラウザのページ遷移と同じ `sec-fetch-mode: navigate`）、8 秒空けて `/healthz` を 20 回。**1回の実測で 50 回以内** |
+| 読む | ページの窓と `/healthz` の窓を分けて、`workersInvocationsAdaptive`（Worker ごとの requests・cpuTime）と `workersAssetsRequestsAdaptiveGroups`（Static Assets のリクエスト）を読む。2回続けて同じ値なら反映済み |
+| 判定 | #4：ページの窓で Worker の起動が 0 か。#2：`/healthz` の窓で gateway・data-api も送った数くらい数えられるか。#1：3 Worker の max の和（チェーン合計の上界）が 10 ms に収まるか、host の cpuTime が下流を含まないか |
+
+- **実環境への操作は読み取りだけ**（workers.dev のサブドメインの読み取り・GraphQL の読み取り・staging の host への GET）。資格情報は `.env` の CI 用トークン（アカウント①）。production には向けない
+- 出力は回数・ミリ秒・判定・窓の時刻だけ。URL・Account ID・スクリプトの ID を出さない（`CLAUDE.md`「このリポジトリは public である」）
+- Analytics の回数はサンプリングで揺れる（20 回が 27 回・17 回など）ので、「0 か、送った数くらいか」で判定する
+- 新しく作った Worker は、Analytics の名前が `__unknown__` で返る時間がある（2026-09-14 は作ってから 1 時間半ほど）。その間は判定せず、出力された窓を `--pages-window` / `--healthz-window` で渡して読み直す
+
+**結果（2026-09-14）**：Static Assets は Worker を起動しない。Service Binding の先も Analytics では別の requests に数えられる。
+CPU 時間は Worker ごとに記録され、**チェーン合計の上界は 6.51 ms・5.28 ms（余裕 3.49 ms・4.72 ms）**。値と読み方は **`06` §7 の表と §7.1** に書いた。
+清算（`05` の清算表・`06` §8）への記入は別の Issue で行う。**「たぶん大丈夫」で M1 に進まない**——gateway に認可が入る M2 で測り直す。
 
 ---
 
@@ -398,5 +400,5 @@ pnpm exec wrangler d1 migrations apply CONTROL_DB --env <env> --config packages/
 - [ ] `docs/runbook/d1-migration.md` に前方互換規律が書かれている
 - [ ] production の `/healthz` が構成情報を漏らさない（実装と workerd 上の受入試験は #55。実環境での確認は production の CD の後）
 - [ ] **host が SPAシェル配信**になっており、ページロードで Worker が起動しない
-- [ ] スモークが CPU時間と `chain_total_ms` を記録し、**10ms に対する余裕が判明している**
+- [ ] スモークと同じ宛先への計測スクリプト（`infra/scripts/measure-free-tier.ts`）が CPU時間とチェーン合計を記録し、**10ms に対する余裕が判明している**
 - [ ] `06` §7 の要確認 #1（CPU独立/合算）・#2（リクエストカウント）・#4（静的アセット無料）が実測で潰れている
