@@ -65,8 +65,8 @@
 - [ ] 🤖 `envs/dev` apply 成功
 - [ ] 🤖 **destroy → apply の往復成功（Issue #1 クローズ）**
 - [ ] 🤖 R2 空化 pre-hook（`infra:empty-buckets`）
-- [ ] 🧑🤖 `envs/staging` / `envs/production` apply（人間承認）
-- [ ] 🤖 3環境すべて `terraform plan` が **No changes**
+- [x] 🧑🤖 `envs/staging` / `envs/production` apply（人間承認）— 2026-09-14・#4
+- [x] 🤖 3環境すべて `terraform plan` が **No changes** — 2026-09-14 実測
 - [ ] 🤖 `infra/terraform/README.md`（二層の境界表）
 
 ## M0-3b / M0-4：Workers ＋ Service Bindings（`03`）
