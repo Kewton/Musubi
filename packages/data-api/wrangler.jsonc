@@ -65,7 +65,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musubi-staging-control",
-          "database_id": "792a1ec4-1ce4-44a0-9876-fe73d9e113fe",
+          "database_id": "00000000-0000-4000-8000-000000000000",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
