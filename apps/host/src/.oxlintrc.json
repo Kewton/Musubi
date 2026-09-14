@@ -1,0 +1,159 @@
+{
+  // host の境界 lint。
+  //   全体        … **D1 / R2 / DO を直接触らない**・data-api 以下を参照しない（CLAUDE.md 不変条件・01 §3.2「禁止する依存」）
+  //   worker/**   … 上に加えて **SSR をしない**：React / TanStack を Worker に持ち込まない（03 §2。描画は prerender Worker だけが持つ）
+  //   app/**      … 上に加えて、サーバーで動く TanStack Start の API を使わない（配る Worker に TanStack Start のサーバーが無い）
+  //
+  // oxlint は lint するファイルに一番近い設定を使う。ルートの .oxlintrc.json を extends するが、
+  // **同じルールは上書きになり合成されない**（apps/gateway/src/.oxlintrc.json と同じ）。overrides でも同じなので、
+  // no-restricted-imports は3か所とも全体の patterns を書き直してある。1か所だけ直すと、そこだけ穴が開く。
+  //
+  // これが空振りしていないことは src/lint.test.ts が、違反を書いたファイルを実際に lint して確かめる。
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "extends": ["../../../.oxlintrc.json"],
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["cloudflare:workers"],
+            "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
+          },
+          {
+            "group": ["@musubi/app-do", "@musubi/app-do/**"],
+            "message": "host は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。gateway を Service Binding（GATEWAY）で呼ぶ"
+          },
+          {
+            "group": ["@musubi/data-api", "@musubi/data-api/**", "**/packages/**"],
+            "message": "host は data-api 以下を直接参照しない（01 §3.2）。gateway を Service Binding（GATEWAY）で呼ぶ"
+          },
+          {
+            "group": ["@musubi/gateway", "@musubi/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
+            "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musubi/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
+          },
+          {
+            "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],
+            "message": "host は R2 を直接触らない（S3 互換 API も同じ）。gateway を Service Binding（GATEWAY）で呼ぶ"
+          },
+          {
+            "group": ["@cloudflare/workers-types", "@cloudflare/workers-types/**"],
+            "message": "型は tsconfig の types で入っている。明示 import は D1Database などを別名で持ち込む抜け道になる"
+          }
+        ]
+      }
+    ],
+    // binding は型を書かなければ env から取り出せない（strict）。D1 / R2 / DO の入口になる型を host では書かせない。
+    // wrangler.jsonc に binding が無いこと自体は src/worker/index.test.ts が env ごとに確かめる。
+    "typescript/no-restricted-types": [
+      "error",
+      {
+        "types": {
+          "D1Database": { "message": "host は D1 を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "D1DatabaseSession": { "message": "host は D1 を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "D1PreparedStatement": { "message": "host は D1 を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "R2Bucket": { "message": "host は R2 を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "R2MultipartUpload": { "message": "host は R2 を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "DurableObjectNamespace": { "message": "host は DO を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "DurableObjectStub": { "message": "host は DO を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "DurableObjectState": { "message": "host は DO を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "DurableObjectStorage": { "message": "host は DO を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" },
+          "SqlStorage": { "message": "host は DO を直接触らない。gateway を Service Binding（GATEWAY）で呼ぶ" }
+        }
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["worker/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": ["react", "react/**", "react-dom", "react-dom/**", "@tanstack/**"],
+                "message": "host の Worker は SSR をしない（Free の CPU 10ms・03 §2）。ページは Static Assets の SPAシェルが返す"
+              },
+              {
+                "group": ["../app", "../app/**"],
+                "message": "host の Worker に SPA のコードを持ち込まない（描画のコードが配る Worker のバンドルに入る）"
+              },
+              {
+                "group": ["cloudflare:workers"],
+                "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
+              },
+              {
+                "group": ["@musubi/app-do", "@musubi/app-do/**"],
+                "message": "host は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。gateway を Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@musubi/data-api", "@musubi/data-api/**", "**/packages/**"],
+                "message": "host は data-api 以下を直接参照しない（01 §3.2）。gateway を Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@musubi/gateway", "@musubi/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
+                "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musubi/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],
+                "message": "host は R2 を直接触らない（S3 互換 API も同じ）。gateway を Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@cloudflare/workers-types", "@cloudflare/workers-types/**"],
+                "message": "型は tsconfig の types で入っている。明示 import は D1Database などを別名で持ち込む抜け道になる"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["app/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "name": "@tanstack/react-start",
+                "importNames": ["createServerFn"],
+                "message": "server function は配る Worker では動かない（host の Worker は /api/* と /healthz しか受けない）。gateway の API を呼ぶ"
+              }
+            ],
+            "patterns": [
+              {
+                "group": ["@tanstack/react-start/server", "@tanstack/react-start/server-entry"],
+                "message": "host は SSR をしない。TanStack Start のサーバー側はビルド時の prerender Worker にしか無い（vite.config.ts）"
+              },
+              {
+                "group": ["cloudflare:workers"],
+                "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
+              },
+              {
+                "group": ["@musubi/app-do", "@musubi/app-do/**"],
+                "message": "host は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。gateway を Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@musubi/data-api", "@musubi/data-api/**", "**/packages/**"],
+                "message": "host は data-api 以下を直接参照しない（01 §3.2）。gateway を Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@musubi/gateway", "@musubi/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
+                "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musubi/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],
+                "message": "host は R2 を直接触らない（S3 互換 API も同じ）。gateway を Service Binding（GATEWAY）で呼ぶ"
+              },
+              {
+                "group": ["@cloudflare/workers-types", "@cloudflare/workers-types/**"],
+                "message": "型は tsconfig の types で入っている。明示 import は D1Database などを別名で持ち込む抜け道になる"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

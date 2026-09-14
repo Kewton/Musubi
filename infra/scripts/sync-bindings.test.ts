@@ -350,11 +350,12 @@ describe("packages/data-api/wrangler.jsonc（実物）", () => {
   });
 });
 
-describe("apps/gateway/wrangler.jsonc（実物）", () => {
-  // gateway は Terraform 由来の binding を1つも持たない（Issue #8・CLAUDE.md 不変条件）。持つのは data-api への
-  // Service Binding だけで、それは Terraform の管理外。data-api と逆向きの穴——D1 / R2 / Queue を書き足しても
-  // 名前が表の binding と一致すれば infra:sync は黙って同期してしまう——を、実物に fixture の bindings を当てて塞ぐ。
-  const text = readFileSync(fileURLToPath(new URL("../../apps/gateway/wrangler.jsonc", import.meta.url)), "utf8");
+describe.each(["gateway", "host"])("apps/%s/wrangler.jsonc（実物）", (app) => {
+  // gateway と host は Terraform 由来の binding を1つも持たない（Issue #8 / #9・CLAUDE.md 不変条件）。持つのは
+  // Service Binding（gateway → data-api、host → gateway）だけで、それは Terraform の管理外。data-api と逆向きの穴——
+  // D1 / R2 / Queue を書き足しても名前が表の binding と一致すれば infra:sync は黙って同期してしまう——を、
+  // 実物に fixture の bindings を当てて塞ぐ。
+  const text = readFileSync(fileURLToPath(new URL(`../../apps/${app}/wrangler.jsonc`, import.meta.url)), "utf8");
 
   it.each(ENVS)("env.%s があり、同期しても1文字も変わらない", (env) => {
     expect(syncBindings({ ...STAGING, env }, text, { env })).toEqual({ text, changed: false, updated: [] });

@@ -1,0 +1,62 @@
+{
+  // PWA Host Shell。**SSR にしない**（CLAUDE.md「Cloudflare Free 前提」・03 §2・06 §4.1）。
+  //   ページは Static Assets（SPAシェル）が返し、Worker を起動しない。Worker が見るのは run_worker_first の2つだけ。
+  //   持つ binding は gateway への Service Binding（GATEWAY）だけ。**D1 / R2 / DO を直接触らない**（CLAUDE.md 不変条件）。
+  //
+  // ── infra:sync の同期先である（正本：infra/scripts/sync-bindings.ts 冒頭）──────────
+  //   - env.dev / env.staging / env.production の3ブロックを必ず置く。deploy は必ず --env を付ける
+  //   - **Terraform 由来の binding を持たない。** d1_databases / r2_buckets / queues / kv_namespaces /
+  //     dispatch_namespaces を書かない（不変条件違反であり、infra:sync も対応しない binding として失敗させる）
+  //   - services は Terraform の管理外（wrangler 側）なので infra:sync は触らない
+  //   - Account ID を書かない（public リポジトリ）
+  //   この契約は infra/scripts/sync-bindings.test.ts が、binding の不在・services の宛先・assets の経路は src/worker/index.test.ts が確かめる。
+  //
+  // ── @cloudflare/vite-plugin が読む入力である ──────────────────────────────
+  //   `vite build` がこれを読み、env を解決した設定を dist/<worker>/wrangler.json に書き出す（assets.directory もそこで埋まる）。
+  //   wrangler deploy はそれを .wrangler/deploy/config.json 経由で読む。
+  //   **env はビルド時に決まる。** CLOUDFLARE_ENV=<env> で選び、未指定なら dev（vite.config.ts）。
+  //   wrangler deploy --env <env> は、ビルドした env と食い違えば失敗する（別 env の設定で配らない）。
+  //   ⚠️ turbo（pnpm build / deploy:*）は CLOUDFLARE_ENV をタスクへ渡さない（turbo.json の env に無い）ので、その経路のビルドは常に dev。
+  //     staging / production へ配るときは apps/host で CLOUDFLARE_ENV=<env> pnpm build してから wrangler deploy --env <env> する。
+  //
+  // ⚠️ services / vars は env へ継承されない。だから3環境に丸ごと書く（gateway と同じ）。
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "musubi-dev-host",
+  // ★SSR エントリ（@tanstack/react-start/server-entry）ではない。/api/* と /healthz だけを見る薄い Worker
+  "main": "src/worker/index.ts",
+
+  // gateway / data-api と揃える（同梱 workerd 1.20260911.1 が受け付ける最大値。2026-09-14 着手時点）。
+  "compatibility_date": "2026-09-11",
+  "observability": { "enabled": true },
+
+  // apps/* はインターネットから届く Worker（CLAUDE.md）。ドメインが無い間は workers.dev で受ける（gateway と同じ）。
+  "workers_dev": true,
+
+  // ── Static Assets（env へ継承される。src/worker/index.test.ts が env ごとに確かめる）──
+  //   directory            … 書かない。vite-plugin がクライアントビルドの出力（dist/client）を入れる
+  //   not_found_handling   … アセットに無いナビゲーションは index.html（SPAシェル）を返す。Worker を起動しない
+  //   run_worker_first     … **ここに書いたパスだけ** Worker が先に受ける。それ以外のページロードは 100k req/日 を消費しない
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/healthz"]
+  },
+
+  "env": {
+    "dev": {
+      "name": "musubi-dev-host",
+      "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local" },
+      // service は gateway の wrangler.jsonc の env.<env>.name。**同じ env の gateway に結ぶ**
+      "services": [{ "binding": "GATEWAY", "service": "musubi-dev-gateway" }]
+    },
+    "staging": {
+      "name": "musubi-staging-host",
+      "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local" },
+      "services": [{ "binding": "GATEWAY", "service": "musubi-staging-gateway" }]
+    },
+    "production": {
+      "name": "musubi-production-host",
+      "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local" },
+      "services": [{ "binding": "GATEWAY", "service": "musubi-production-gateway" }]
+    }
+  }
+}

@@ -1,11 +1,14 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist"
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "noEmit": true
   },
   "include": [
-    "src/**/*"
+    "src/worker/**/*",
+    "src/*.ts"
   ],
   "references": [
     {
