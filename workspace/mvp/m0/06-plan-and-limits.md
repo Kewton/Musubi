@@ -66,16 +66,20 @@ L1-L2 の依頼を L3 に昇格させないラダーの機械強制（企画書1
 
 これには副次効果がある：**Workers Static Assets へのリクエストは無料・無制限で、100k req/日 を消費しない。** ページロードのコストがゼロになり、日次予算をAPI呼び出しだけに使える。
 
-Spec Engine の computed 評価は AST上限つき設計（企画書8章 L2）なので 10ms に収まる想定。**ただし M1 で実測する**（`03` の貫通スモークに CPU時間の記録を入れる）。
+Spec Engine の computed 評価は AST上限つき設計（企画書8章 L2）なので 10ms に収まる想定。**ただし M1 で実測する**（M0 の health chain と同じく Workers Analytics の cpuTime で測る。計測スクリプトは `infra/scripts/measure-free-tier.ts`・§7.1）。
 
-> ⚠️ **要確認（最優先・§7 の #1）**：Service Bindings のチェーン（host→gateway→data-api）で **CPU時間が各Workerに独立して配分されるのか、リクエスト全体で合算されるのか**。合算なら3ホップ構成は 10ms で窮屈になる。**M0の最初の実測項目にする**（`03` §5 のスモークで計測）。合算だった場合の退路は、gateway と data-api の統合ではなく **Workers Paid $5 への昇格**（統合すると企画書9章「Data APIが唯一の権限強制点」が崩れる。**アーキテクチャを課金プランに売らない**）。
+> ⚠️ **要確認（最優先・§7 の #1）**：Service Bindings のチェーン（host→gateway→data-api）で **CPU時間が各Workerに独立して配分されるのか、リクエスト全体で合算されるのか**。合算なら3ホップ構成は 10ms で窮屈になる。**M0の最初の実測項目にする**（`03` §5・計測スクリプトで Workers Analytics を読む）。合算だった場合の退路は、gateway と data-api の統合ではなく **Workers Paid $5 への昇格**（統合すると企画書9章「Data APIが唯一の権限強制点」が崩れる。**アーキテクチャを課金プランに売らない**）。
+>
+> **2026-09-14 実測（§7 #1・§7.1）**：Analytics の cpuTime は Worker ごとに別に記録される。上限の判定がどちらの単位かは一次情報に書かれていないが、**合算の上界（3 Worker の max の和）でも 6.51 ms・5.28 ms**（2回）で、M0 の health chain はどちらの解釈でも 10 ms に収まる。gateway に認可（M2）が入ったら測り直す。
 
 ### 4.2 100k req/日
 
 - ドッグフーディング（M3・5〜10コミュニティ）には余裕
 - **M4公開時には足りない** → 公開前に Workers Paid（1,000万リクエスト）へ
 
-> ⚠️ **要確認（§7 の #2）**：Service Binding 経由の呼び出しが**課金リクエストとして別カウントされるか**。別カウントなら1 API呼び出し＝3リクエスト（host/gateway/data-api）となり、実効予算は 33k/日 になる。§4.1 の静的配信化と合わせて、**M0のスモークで実測する。**
+> ⚠️ **要確認（§7 の #2）**：Service Binding 経由の呼び出しが**課金リクエストとして別カウントされるか**。別カウントなら1 API呼び出し＝3リクエスト（host/gateway/data-api）となり、実効予算は 33k/日 になる。§4.1 の静的配信化と合わせて、**M0で実測する**（`03` §5・計測スクリプト）。
+>
+> **2026-09-14 実測（§7 #2・§7.1）**：Analytics の requests では **gateway・data-api も host と同じくらい数えられる**（host への 1 回が 3 requests）。請求は Standard では最初の1回だけ（一次情報）だが、**Free の 100k/日 がどちらで数えるかは一次情報に書かれていない**。だから予算は別カウント（実効 33k/日）で見積もる（P-2 の閾値は変えない。Workers Analytics のアカウントの合計は Service Binding の先も含むので、保守側に数えることになる）。
 
 ### 4.3 staging / production の無償枠の食い合い
 
@@ -175,16 +179,82 @@ M0はほぼトラフィックゼロだが、**CI が枠を食う**。以下を�
 
 ## 7. 要確認リスト（M0で一次情報／実測により確定させる）
 
-| # | 項目 | 確定方法 | 期限 |
+| # | 項目 | 確定方法 | 期限 | 結果 |
+|---|---|---|---|---|
+| 1 | **Service Bindings で CPU時間は各Worker独立か合算か** | 計測スクリプトで Workers Analytics の cpuTime を読む（§7.1） | M0 | **2026-09-14 実測・/healthz 20 回 × 2**。Analytics の cpuTime は **Worker ごとに別に記録**される（host の1回あたり 0.67・0.64 ms は gateway＋data-api の 3.02・3.07 ms より小さい＝下流を含まない）。上限の判定単位は一次情報に記載なし（未確定）。**合算の上界（max の和）6.51 ms・5.28 ms、余裕 3.49 ms・4.72 ms**。合算でも収まるので M0 では決めなくてよい |
+| 2 | **Service Binding 呼び出しは課金リクエストとして別カウントされるか** | Analytics のリクエスト数と実呼び出し数を突き合わせ（§7.1） | M0 | **2026-09-14 実測・/healthz 20 回 × 2**。Analytics の requests は host 27・20、gateway 20・26、data-api 20・17（サンプリングの推定値）＝**Analytics 上は別カウント**（host への 1 回が 3 requests）。請求は Standard では1回（一次情報）。Free の 100k/日 の数え方は一次情報に記載なし → **別カウントで見積もる**（§4.2） |
+| 3 | 1ログインで複数 Cloudflare アカウントを保持できるか | ダッシュボードで実際に作ってみる | 🧑 H-14 | — |
+| 4 | Workers Static Assets へのリクエストが 100k/日 を消費しないこと | Analytics で確認（§7.1） | M0 | **2026-09-14 実測・ページ 20 回 × 2**（`/` 10 回＋深いリンク 10 回）。**Worker の起動 0 回・0 回**、Static Assets の requests は 22・11 回と記録 → **消費しない**（確定。一次情報とも一致） |
+| 5 | Free で Workers Custom Domain / Routes が使えるか（🧑 H-04 後） | ドメイン取得後に確認 | M1 | — |
+| 6 | Queues の Free 提供条件（2026-02 追加の現行仕様） | 一次情報 | M1 | — |
+| 7 | Free の subrequest 上限（1リクエストあたり）と本構成の消費数 | ドキュメント＋実測 | M0 | — |
+| 8 | Workers Logs の無償保持期間 | 一次情報 | M0 | — |
+
+### 7.1 無償枠の実測（2026-09-14・Issue #25）
+
+**測り方。** 計測スクリプト `infra/scripts/measure-free-tier.ts` を手元から staging（アカウント①）に向けて回した。
+デプロイ直後の貫通スモーク（`pnpm smoke`）には入れていない（Analytics は数分遅れて反映されるので、`04` §4 の 10分の線を削る）。
+
+```bash
+pnpm exec tsx --env-file=.env infra/scripts/measure-free-tier.ts          # 送って、反映を待って、判定する
+pnpm exec tsx --env-file=.env infra/scripts/measure-free-tier.ts \
+  --pages-window <since>/<until> --healthz-window <since>/<until>          # 送らずに、前の窓を読み直す
+```
+
+- **CPU 時間は Worker の中では測れない。** Workers の時計（`performance.now`・`Date.now`）は I/O のときにしか進まない。だから正は Workers Analytics の invocation の cpuTime
+- 送るのは staging の host への GET だけで、**1回の実測で 40 回**（上限 50）：`/` と深いリンク（`/communities/c1/apps`）を 10 回ずつ、8 秒空けて `/healthz` を 20 回。
+  ページはブラウザのページ遷移と同じヘッダ（`sec-fetch-mode: navigate`）で送る（Node の fetch はこのヘッダを `cors` に書き換えるので、`node:https` で送る）
+- 資格情報は `.env` の CI 用トークン。**読み取りだけ**（workers.dev のサブドメインの読み取り・GraphQL の読み取り）。宛先の URL は API から組み立て、表示もファイルへの書き込みもしない
+- ページの窓と `/healthz` の窓を応答の Date ヘッダから作り、Analytics を窓ごとに読む。2回続けて同じ値になったら反映済みとみなす
+- 出力は回数・ミリ秒・判定・窓の時刻だけ
+
+**使ったデータセットと欄**（アカウント単位。単位は GraphQL のスキーマの説明で確かめた）
+
+| 何を | データセット | 欄 | 出典 |
 |---|---|---|---|
-| 1 | **Service Bindings で CPU時間は各Worker独立か合算か** | `03` のスモークで CPU時間を実測 | M0 |
-| 2 | **Service Binding 呼び出しは課金リクエストとして別カウントされるか** | Analytics のリクエスト数と実呼び出し数を突き合わせ | M0 |
-| 3 | 1ログインで複数 Cloudflare アカウントを保持できるか | ダッシュボードで実際に作ってみる | 🧑 H-14 |
-| 4 | Workers Static Assets へのリクエストが 100k/日 を消費しないこと | Analytics で確認 | M0 |
-| 5 | Free で Workers Custom Domain / Routes が使えるか（🧑 H-04 後） | ドメイン取得後に確認 | M1 |
-| 6 | Queues の Free 提供条件（2026-02 追加の現行仕様） | 一次情報 | M1 |
-| 7 | Free の subrequest 上限（1リクエストあたり）と本構成の消費数 | ドキュメント＋実測 | M0 |
-| 8 | Workers Logs の無償保持期間 | 一次情報 | M0 |
+| Worker ごとの起動の回数 | `workersInvocationsAdaptive` | `sum.requests`（`dimensions.scriptName` で分ける） | [Querying Workers Metrics with GraphQL](https://developers.cloudflare.com/analytics/graphql-api/tutorials/querying-workers-metrics/) |
+| CPU 時間 | 同上 | `sum.cpuTimeUs`・`max.cpuTime`・`quantiles.cpuTimeP50/P99`（すべてマイクロ秒） | 同上・スキーマ |
+| サンプリング | 同上 | `avg.sampleInterval`（1 ならサンプリングなし） | スキーマ |
+| Static Assets が返したリクエスト | `workersAssetsRequestsAdaptiveGroups` | `sum.requests`（`hostname` で host に絞る。`dimensions.statusCode` を選ぶ） | スキーマ |
+| 権限 | — | Account Analytics: Read | [Configure an Analytics API token](https://developers.cloudflare.com/analytics/graphql-api/getting-started/authentication/api-token-auth/) |
+
+**結果**
+
+| | 1回目（09:14 UTC） | 2回目（09:28 UTC） |
+|---|---|---|
+| ページ 20 回 → Worker の起動（host・gateway・data-api） | 0・0・0 | 0・0・0 |
+| ページ 20 回 → Static Assets の requests | 22 | 11 |
+| `/healthz` 20 回 → requests（host・gateway・data-api） | 27※・20・20 | 20・26※・17 |
+| CPU max（host・gateway・data-api） | 1.56※・1.18・3.77 ms | 1.16・1.30※・2.83 ms |
+| CPU p50（同） | 0.59・0.61・2.28 ms | 0.58・0.72・2.10 ms |
+| CPU 1回あたりの平均（同） | 0.67・0.63・2.39 ms | 0.64・0.90・2.17 ms |
+| **チェーン合計の上界（max の和）／余裕** | **6.51 ms ／ 3.49 ms** | **5.28 ms ／ 4.72 ms** |
+| チェーン合計の平均 | 3.70 ms | 3.70 ms |
+| errors | 0 | 0 |
+
+※ サンプリングあり（`sampleInterval` 1.5）。回数・和は重みを掛けた推定値で、max・分位は取りこぼし得る。
+1回目の `/healthz` は約 70 分ぶりの呼び出しで、コールドスタートを含み得る。
+
+**読み方と、残る不確かさ**
+
+- **#4（Static Assets）は確定。** Worker の起動は2回とも 0。一次情報も「Requests to static assets are free and unlimited」「`run_worker_first` に当たるリクエストは常に Worker を起動する」と書く（[Static Assets の Billing](https://developers.cloudflare.com/workers/static-assets/billing-and-limitations/)）。host の `run_worker_first` は `/api/*` と `/healthz` だけ（`03` §2）
+- **#2（Service Binding）は「Analytics 上は別カウント」までが実測。** 一次情報の料金は、Standard では Service Binding の呼び出しを「最初の Worker の1リクエスト＋両 Worker の CPU 時間の合計」で請求する（[Pricing: Service bindings](https://developers.cloudflare.com/workers/platform/pricing/#service-bindings)）。
+  Free の 1日 100,000 リクエスト（[Limits: Daily requests](https://developers.cloudflare.com/workers/platform/limits/#daily-requests)）がどちらで数えるかは書かれていない。Service Binding の先の呼び出しは、呼び出し元の subrequest の上限にも数えられる（[Service bindings: Limits](https://developers.cloudflare.com/workers/runtime-apis/bindings/service-bindings/#limits)。§7 #7）
+- **#1（CPU）は「記録は Worker ごと」までが実測。** 上限は料金表では「10 milliseconds of CPU time per invocation」、制限表では「CPU time per HTTP request: 10 ms」で、I/O の待ちは数えない（[Limits: CPU time](https://developers.cloudflare.com/workers/platform/limits/#cpu-time)）。
+  Service Binding のチェーンで合算して判定するかは書かれていない。合算の上界でも余裕が 3.49 ms あるので、M0 の health chain は判定単位によらず収まる
+- **回数は揺れる。** Adaptive のデータセットは、20 回ていどでもサンプリングされたり（20 回が 27 回）、重み 1 のまま取りこぼしたり（17 回）した。
+  スクリプトは「0 か、送った数くらい（半分から倍）か」で判定する。P-2 で見る日次リクエストも、同じ Adaptive の推定値である
+- CPU の分位は、上限を少し超えて見えてもエラーにならないことがある（上限未満のリクエストの余りを繰り越す仕組み。[Workers Metrics](https://developers.cloudflare.com/workers/observability/metrics-and-analytics/)）
+
+**Worker 名が `__unknown__` で返った件（Issue #25 の調査）**
+
+- 観測：staging の3つの Worker は 2026-09-14 08:01 UTC ごろ `deploy-staging` で初めて作られた。`workersInvocationsAdaptive` の `scriptName`（と `scriptTag`・`environmentName`）は、08:50〜09:14 UTC の読み取りで `__unknown__` だった（`scriptVersion` だけ入っていた）。**09:33 UTC には名前が入り**、それより前の窓（08:02 のスモーク）の行にも遡って入った
+- 同じトークン・同じデータセット・同じ欄で、アカウント①に以前からある Worker の名前は読めた
+- だから原因は**反映の遅れ**（新しい Worker の名前は、作ってから 73 分後にはまだ入らず、92 分後には入っていた）。**権限・データセット・欄の選び方ではない**。トークンは作っていない
+- スクリプトは、名前の無い起動がある窓を判定しない（exit 2）。時間を空けて、出力された窓で読み直す
+
+**反映の遅れ（ほかに見えたもの）**：`workersInvocationsAdaptive` の回数は送ってから約 1 分で読めた。`workersAssetsRequestsAdaptiveGroups` は、
+`dimensions` を選ばずに `hostname` で絞った集計が約 9 分空のままで、`statusCode` を選ぶと約 1.5 分で読めた。
 
 > **数値は変わる。** 本書は「M0着手時点の前提」であり、**上限に近づいたときは必ず一次情報を引き直す**。この表の値をコードやアラート閾値にハードコードしない。
 
