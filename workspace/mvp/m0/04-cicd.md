@@ -204,9 +204,11 @@ jobs:
 
       - run: pnpm build
 
-      # ① D1マイグレーション（デプロイより先。前方互換規律が前提）
-      - run: pnpm exec wrangler d1 migrations apply musubi-staging-control --remote --env staging
-        working-directory: packages/control-plane
+      # ① D1マイグレーション（デプロイより先。前方互換規律が前提 → docs/runbook/d1-migration.md §3・§4）
+      #    SQL は packages/control-plane/migrations、当てる先は data-api の設定の CONTROL_DB（03 §7・2026-09-14 決定）。
+      #    control-plane には wrangler の設定が無いので working-directory では当たらない。リポジトリ直下から --config で指す。
+      #    --remote は database_id が実物でないと当たらない。⓪ の乖離チェックが先にあるのはそのため
+      - run: pnpm exec wrangler d1 migrations apply CONTROL_DB --env staging --config packages/data-api/wrangler.jsonc --remote
 
       # ② デプロイ順序：依存の末端から。data-api → gateway → host
       - run: pnpm exec wrangler deploy --env staging --var GIT_SHA:'${{ github.sha }}'
@@ -221,6 +223,10 @@ jobs:
 ```
 
 **デプロイ順序が data-api → gateway → host である理由**：Service Binding は「呼ぶ側」が「呼ばれる側」の存在を要求する。末端から配れば、途中の瞬間も常に整合が取れている。
+
+**migration（①）がデプロイ（②）より先である理由**：新しいコードは新しいスキーマを前提にしてよい。代わりに ① と ② の間は古い data-api が新しいスキーマの上で動くので、
+**1つ前のリリースのコードが新しいスキーマで動く**形でしかスキーマを変えない（前方互換規律。`docs/runbook/d1-migration.md` §4）。
+② が落ちても、§6 でコードを巻き戻しても、同じ状態になる。
 
 > **宣言した線：main merge → smoke green まで ≤ 10分**（README §5）。
 
@@ -245,7 +251,8 @@ jobs:
       CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}'
       CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}'
     steps:
-      # staging と同一手順。--env production / musubi-production-control に読み替え
+      # staging と同一手順。--env production に読み替え
+      # ① の D1 マイグレーションも --env production だけを変える（SQL の置き場と --config は staging と同じ）
       # ⓪ の乖離チェックも同じ形で `envs/production` と `--env production` に読み替える。
       #    backend（state の置き場）は production でもアカウント①の R2 なので、R2 の資格情報は staging と同じ
       # 最後に smoke --env production
@@ -288,9 +295,10 @@ gh workflow run rollback.yml -f target_tag=v0.1.0 -f env=production
 | 規律 | 内容 |
 |---|---|
 | **前方互換のみ** | 列の追加はOK。削除・改名・NOT NULL化は**単発で行わない** |
-| **2段階リリース** | ① 新旧両対応のコードをデプロイ → ② 十分な期間後に旧スキーマを撤去する migration |
+| **2段階リリース** | ① 新旧両対応のコードをデプロイ → ② 旧スキーマを撤去する migration。「十分な期間」＝**1つ前の production リリースが撤去対象を使っていない**こと。段ごとに別のタグで出す（`docs/runbook/d1-migration.md` §4.4） |
 | **destructive migration のレビュー必須** | `DROP` / `ALTER ... DROP COLUMN` / `RENAME` を含むPRは CI が警告し、人間の明示承認を要求する |
 | **バックアップ** | production の D1 は `wrangler d1 export` を定期実行し R2 へ（M0では手順書のみ。cron化はM2） |
+| **最後の手段：Time Travel** | 過去の時点へ DB を丸ごと戻す（破壊的・Free は7日まで）。**コードを先に戻す**。戻すと `d1_migrations` も戻り、次の CD で同じ migration が当たり直す（`docs/runbook/d1-migration.md` §5.3） |
 
 > **M0のうちにこれを決めておくことの価値**：M2で認証・Community・Membership のスキーマが入る。そこで初めて考えると、必ず一度データを壊す。
 

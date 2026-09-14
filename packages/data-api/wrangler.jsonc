@@ -11,6 +11,12 @@
   //   - kv_namespaces / queues.consumers を書かない。Account ID を書かない（public リポジトリ）
   //   - `--check` は binding の欠落を検出しない。欠落は infra/scripts/sync-bindings.test.ts が落とす
   //
+  // ── D1 マイグレーションもこの設定で当てる（03 §7・docs/runbook/d1-migration.md）──────────
+  //   SQL は packages/control-plane/migrations に置き、3環境の CONTROL_DB の migrations_dir で指す（このファイルからの相対）。
+  //   CONTROL_DB を binding しているのはここだけで、control-plane には wrangler の設定が無い。リポジトリ直下から：
+  //     pnpm exec wrangler d1 migrations apply CONTROL_DB --env <env> --config packages/data-api/wrangler.jsonc [--local|--remote]
+  //   --remote は database_id が infra:sync で書き戻された後でないと当たらない。migrations_dir は infra:sync が触らない
+  //
   // ⚠️ bindings（d1_databases / r2_buckets / durable_objects / vars）は env へ継承されない。
   //   だから3環境に丸ごと書く。トップレベルに置かないのは、置くと env 側との食い違いが生まれるだけで、
   //   --env を付けない配備はそもそも行わないため。
@@ -39,7 +45,12 @@
       "name": "musubi-dev-data-api",
       "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local" },
       "d1_databases": [
-        { "binding": "CONTROL_DB", "database_name": "musubi-dev-control", "database_id": "<TF_OUTPUT>" }
+        {
+          "binding": "CONTROL_DB",
+          "database_name": "musubi-dev-control",
+          "database_id": "<TF_OUTPUT>",
+          "migrations_dir": "../control-plane/migrations"
+        }
       ],
       "r2_buckets": [
         { "binding": "BUNDLES", "bucket_name": "musubi-dev-bundles" },
@@ -51,7 +62,12 @@
       "name": "musubi-staging-data-api",
       "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local" },
       "d1_databases": [
-        { "binding": "CONTROL_DB", "database_name": "musubi-staging-control", "database_id": "<TF_OUTPUT>" }
+        {
+          "binding": "CONTROL_DB",
+          "database_name": "musubi-staging-control",
+          "database_id": "<TF_OUTPUT>",
+          "migrations_dir": "../control-plane/migrations"
+        }
       ],
       "r2_buckets": [
         { "binding": "BUNDLES", "bucket_name": "musubi-staging-bundles" },
@@ -63,7 +79,12 @@
       "name": "musubi-production-data-api",
       "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local" },
       "d1_databases": [
-        { "binding": "CONTROL_DB", "database_name": "musubi-production-control", "database_id": "<TF_OUTPUT>" }
+        {
+          "binding": "CONTROL_DB",
+          "database_name": "musubi-production-control",
+          "database_id": "<TF_OUTPUT>",
+          "migrations_dir": "../control-plane/migrations"
+        }
       ],
       "r2_buckets": [
         { "binding": "BUNDLES", "bucket_name": "musubi-production-bundles" },

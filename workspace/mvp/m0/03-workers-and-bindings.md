@@ -336,12 +336,30 @@ pnpm exec wrangler dev -c apps/host/wrangler.jsonc \
 
 ## 7. D1 マイグレーション
 
-- 置き場：`packages/control-plane/migrations/*.sql`（wrangler の d1 migrations 規約に合わせる）
-- M0の中身：`_musubi_meta` テーブル1つだけでよい（migration機構が動くことの確認が目的）
-- 適用：`wrangler d1 migrations apply musubi-<env>-control --remote --env <env>`
-- **CIで適用する**（`04` §4）。手で当てない
+- 置き場：`packages/control-plane/migrations/NNNN_<名前>.sql`（wrangler の d1 migrations 規約に合わせる。D1 は Control Plane 専用）
+- M0の中身：`0001_musubi_meta.sql`（`_musubi_meta` テーブル1つ。migration機構が動くことの確認が目的）
+- 適用（リポジトリ直下から）：
 
-> **ロールバックは D1 にネイティブ機能が無い。** 前方互換のみのマイグレーション規律（列は足すが消さない・destructive変更は2段階リリース）を `docs/runbook/d1-migration.md` に書く。**これをM0で書いておかないと、M2で必ず事故る。**
+```bash
+pnpm exec wrangler d1 migrations apply CONTROL_DB --env <env> --config packages/data-api/wrangler.jsonc [--local|--remote]
+```
+
+- staging / production は **CDで適用する**（`04` §4・§5）。手で当てない
+- **`--remote` は `infra:sync` で `database_id` が書き戻された後でないと当たらない**（`<TF_OUTPUT>` のままでは実物を指さない）
+
+**SQL は control-plane、適用は data-api の設定（2026-09-14 決定・#12）**
+
+当初は「`packages/control-plane` で `wrangler d1 migrations apply` を実行する」形だったが、そのままでは動かない。
+
+- `packages/control-plane` には wrangler の設定ファイルが無く、どの D1 に適用するか解決できない
+- `CONTROL_DB` を binding しているのは `packages/data-api/wrangler.jsonc` だけで、`database_id` が `infra:sync` で書き戻されるのもそこだけ
+- control-plane に設定ファイルを足しても `infra:sync` の同期対象外なので、`database_id` が仮の値のまま残る
+
+だから data-api の3環境の `CONTROL_DB` に `"migrations_dir": "../control-plane/migrations"` を書き（パスは設定ファイルのディレクトリから解決される）、
+リポジトリ直下から `--config` で指す。`packages/data-api/src/index.test.ts` が、この適用コマンドで env.dev に `--local` で全部当たることを毎回確かめる。
+
+> **ロールバックは D1 にネイティブ機能が無い。** 前方互換のみのマイグレーション規律（列は足すが消さない・destructive変更は2段階リリース）と、
+> 適用・巻き戻しの手順は `docs/runbook/d1-migration.md` に書いた。**これをM0で書いておかないと、M2で必ず事故る。**
 
 ---
 
