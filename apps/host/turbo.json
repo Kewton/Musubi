@@ -1,0 +1,19 @@
+{
+  // host だけの turbo の設定。ルートの turbo.json を引き継ぎ、build の2点だけを足す（2026-09-14 決定・Issue #15）。
+  //
+  // env     … host は **ビルドの時点で** CLOUDFLARE_ENV によって env が決まる（未指定なら dev。vite.config.ts）。
+  //           turbo は既定（strict）で env に書いていない環境変数をタスクへ渡さないので、ここに書かないと
+  //           `CLOUDFLARE_ENV=staging pnpm build` でも dev の出力になる。書くとキャッシュの鍵にも入り、env ごとに別の出力になる。
+  // outputs … vite build は配備用の設定 .wrangler/deploy/config.json（wrangler deploy が読む。dist/ のビルド出力を指す）も書く。
+  //           outputs に入れないと、キャッシュが当たったとき dist/ だけが戻り、wrangler deploy が
+  //           `The assets property in your configuration is missing the required directory property.` で落ちる。
+  //           package の outputs はルートの outputs を置き換えるので、ルートの2つも並べる。
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "env": ["CLOUDFLARE_ENV"],
+      "outputs": ["dist/**", ".output/**", ".wrangler/deploy/**"]
+    }
+  }
+}

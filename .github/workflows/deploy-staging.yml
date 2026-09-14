@@ -1,0 +1,159 @@
+name: deploy-staging
+# main に入ったものを staging へ配る（04 §4）。
+#   前提の確認 → ⓪ 乖離チェック → build → ① D1 マイグレーション → ② deploy（data-api → gateway → host）→ ③ 貫通スモーク → ④ 所要時間
+# 宣言した線：main merge → smoke green ≤ 10分（04 §4）。④ が実測してログとジョブの要約に残す。
+#
+# ── 起動 ──────────────────────────────────────────────────────────────
+# main への push と手動実行（workflow_dispatch）。手動実行でも main 以外からは配らない（前提の確認で落とす）。
+# PR では起動しない。PR の段階では実環境に書き込まない（dry-run で確かめる。04 §4）。
+#
+# ── public リポジトリなので（CLAUDE.md「このリポジトリは public である」・04 §3.1）────────
+# - 資格情報は、それを使うステップの env にだけ渡す。**ジョブの env に置かない**（install や build のステップに届けない）
+#     Cloudflare のトークン・Account ID … ① ② だけ
+#     tfstate の backend（R2）の3つ   … ⓪ だけ。⓪ に Cloudflare のトークンを渡さない（terraform output には要らない）
+#     SMOKE_BASE_URL                  … ③ だけ。**staging 環境の Secret**（Variable はステップの env 表示に平文で出る）
+# - vars を使わない。Account ID と R2 のエンドポイント（URL に Account ID を含む）は Secret（2026-09-14 移行済み）
+# - wrangler の出力をそのまま流さない。deploy-worker.ts がファイルに受け、workers.dev のホスト名を伏せた要約だけを出す
+#   （wrangler deploy は配備後に workers.dev の URL を表示する）
+# - smoke に --base-url を使わない（pnpm がコマンド行を引数ごとログに出す）
+# - environment に url を書かない（デプロイの記録に載り、誰でも読める）
+#
+# この形は infra/scripts/deploy-worker.test.ts が確かめる（並び・資格情報の置き場所・起動条件）。
+on:
+  push: { branches: [main] }
+  workflow_dispatch:
+
+# 取り消さない。配っている途中（migration の後・deploy の前など）で止めない。
+# 実行中に次の push が来たら待たせる。待っているものが複数あれば、GitHub は最新の1つだけを残す。
+concurrency: { group: deploy-staging, cancel-in-progress: false }
+
+# 読み取りだけ。Cloudflare へは Secret のトークンで書く（GITHUB_TOKEN は使わない）。
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # 平常は数分。宣言した線（10分）は ④ で見る。これは wrangler が止まったときの安全網
+    timeout-minutes: 15
+    # SMOKE_BASE_URL は staging 環境の Secret。宣言しないと空になる
+    environment: staging
+    steps:
+      # 値は渡さない。式の比較の結果（true / false）だけがこのステップに届く。
+      # 足りなければ何も配らずに落とす（配った後に smoke の宛先が無いと気づくのを避ける）。
+      - name: 前提の確認（main であること・Secret が揃っていること）
+        env:
+          REF: ${{ github.ref }}
+          HAS_CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          HAS_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
+          HAS_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
+          HAS_R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT != '' }}
+          HAS_SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL != '' }}
+        run: |
+          if [ "$REF" != refs/heads/main ]; then
+            echo "::error::staging へ配るのは main だけ。手動実行でも main を選ぶ"
+            exit 1
+          fi
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_S3_ENDPOINT SMOKE_BASE_URL; do
+            has="HAS_${name}"
+            if [ "${!has}" != true ]; then
+              echo "::error::${name} が空。Secret が未登録（SMOKE_BASE_URL は staging 環境の Secret、ほかはリポジトリの Secret）"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .node-version, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # ── ⓪ デプロイ直前の乖離チェック（2026-09-13 決定・03 §3）─────────────────
+      # wrangler.jsonc の Terraform 由来の欄が staging の実物（state）と一致しなければ、何も配らずに落とす。
+      # ★ setup-terraform に terraform_version_file という入力は無い（04 §3 訂正1）。読んで渡す
+      - id: tfver
+        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ steps.tfver.outputs.version }}
+          terraform_wrapper: false # wrapper は出力と exit code を包むので切る
+      # 資格情報は tfstate の backend（R2）の3つだけ。Cloudflare のトークンは渡さない。
+      # ★ init の出力は stderr ごと捨てる。backend の endpoint URL（Account ID を含む）を出しうる
+      - name: ⓪ 乖離チェック（wrangler.jsonc ⇔ terraform output）
+        env:
+          CHECKPOINT_DISABLE: '1'
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL_S3: ${{ secrets.R2_S3_ENDPOINT }}
+        run: |
+          terraform -chdir=infra/terraform/envs/staging init -input=false -lockfile=readonly -no-color > /dev/null 2>&1 \
+            || { echo "::error::terraform init に失敗した（詳細はログに出さない。手元で同じ手順を再現する）"; exit 1; }
+          pnpm infra:sync --env staging --check
+
+      # host は **ビルドの時点で** env が決まる（apps/host/wrangler.jsonc 冒頭）。CLOUDFLARE_ENV を付けてビルドする。
+      # turbo は host の build にだけこの値を渡し、キャッシュの鍵にも入れる（apps/host/turbo.json）。
+      - name: build（CLOUDFLARE_ENV=staging）
+        env:
+          CLOUDFLARE_ENV: staging
+        run: pnpm build
+
+      # ── ① D1 マイグレーション（デプロイより先。前方互換規律が前提 → docs/runbook/d1-migration.md §3・§4）──────
+      # --remote は database_id が実物でないと当たらない。⓪ の乖離チェックが先にあるのはそのため
+      - name: ① D1 マイグレーション（CONTROL_DB）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env staging --target migrate
+
+      # ── ② デプロイ：依存の末端から data-api → gateway → host（呼ばれる側を先に置く）──────────────
+      # --var GIT_SHA が host の /healthz の version になり、③ の --expect-sha がそれを照合する
+      - name: ② deploy data-api
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env staging --target data-api --sha "$GIT_SHA"
+      - name: ② deploy gateway
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env staging --target gateway --sha "$GIT_SHA"
+      - name: ② deploy host
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env staging --target host --sha "$GIT_SHA"
+
+      # ── ③ 貫通スモーク（03 §5）。落ちたらデプロイ失敗として扱う ──────────────────────
+      # 宛先は staging 環境の Secret から環境変数で渡す。smoke は URL を一切表示しない
+      - name: ③ 貫通スモーク（host → gateway → data-api → D1 / R2 / DO）
+        env:
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+          GIT_SHA: ${{ github.sha }}
+        run: pnpm smoke --env staging --expect-sha "$GIT_SHA"
+
+      # ── ④ 所要時間（宣言した線：main merge → smoke green ≤ 10分）──────────────────────
+      # 起点は main が更新された時刻（push イベントの repository.pushed_at）。キューの待ちも含む。
+      # 超えても配備は成功しているので落とさない。警告とジョブの要約に残す（04 §8「実測し記録した」）。
+      - name: ④ main → staging の所要時間
+        if: github.event_name == 'push'
+        env:
+          PUSHED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          case "$PUSHED_AT" in
+            '' ) echo "::warning::repository.pushed_at が無いので測れない"; exit 0 ;;
+            *[!0-9]* ) pushed="$(date -d "$PUSHED_AT" +%s)" || { echo "::warning::repository.pushed_at が読めないので測れない"; exit 0; } ;;
+            * ) pushed="$PUSHED_AT" ;;
+          esac
+          elapsed=$(( $(date +%s) - pushed ))
+          line="main → staging（push から smoke green まで）: ${elapsed} 秒（宣言した線 600 秒）"
+          echo "$line"
+          echo "- ${line}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$elapsed" -gt 600 ]; then
+            echo "::warning::main → staging が 10分を超えた（${elapsed} 秒）。04 §4 の宣言した線"
+          fi
