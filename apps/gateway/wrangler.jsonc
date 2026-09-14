@@ -15,9 +15,10 @@
   //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musubi-Probe ヘッダが
   //                         secret MUSUBI_PROBE_TOKEN と一致したときだけ返し、それ以外は {"ok": true|false} だけにする。
   //                         未設定・書き違いは probe として扱う（閉じる側に倒す）
-  //   MUSUBI_PROBE_TOKEN  … **wrangler secret。ここ（vars）に書かない。** `wrangler secret put MUSUBI_PROBE_TOKEN --env production`。
-  //                         host にも同じ値を置く（host はこの値を X-Musubi-Probe に載せて gateway の詳細を受け取る）。
-  //                         置いていない production は常に隠す
+  //   MUSUBI_PROBE_TOKEN  … **Worker の secret。ここ（vars）に書かない。** 値の正本は GitHub の production 環境の Secret MUSUBI_PROBE_TOKEN で、
+  //                         CD（deploy-production.yml。04 §5）が deploy のたびに `wrangler deploy --secrets-file` で gateway と host に同じ値を載せる
+  //                         （infra/scripts/deploy-worker.ts。値が無ければ配らない）。**手で wrangler secret put をしない**（次の deploy で上書きされる）。
+  //                         host はこの値を X-Musubi-Probe に載せて gateway の詳細を受け取る。置いていない production は常に隠す
   //   この値の env ごとの形と、secret が vars に無いことは src/index.test.ts が確かめる。
   //
   // ⚠️ services / vars は env へ継承されない。だから3環境に丸ごと書く（data-api と同じ）。
