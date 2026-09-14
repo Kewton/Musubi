@@ -113,19 +113,29 @@ pnpm smoke --env staging
 
 **問い**：Free の上限に対してどれだけ余裕があるか。**「たぶん大丈夫」で M1 に進まない。**
 
-| # | 項目 | 測り方 | 結果 | 判定 |
+> **2026-09-14 実施（Issue #25・#26）。** 測り方を変えた：CPU 時間は Worker の中では測れない（Workers の時計は I/O のときにしか進まない）ので、
+> スモークに `budget.chain_total_ms` は入れず、**Workers Analytics（GraphQL）を読む2本のスクリプト**にした（`03` §5）。
+> `infra/scripts/measure-free-tier.ts` は staging に GET を送って F-1〜F-4 を測る（`06` §7.1）。`infra/scripts/free-tier-report.ts` は
+> **読み取りだけ**でアカウント①・②の期間の最大値と P-1〜P-4 を集計する（`06` §7.2。週次チェックにも使う）。
+
+| # | 項目 | 測り方 | 結果（2026-09-14） | 判定 |
 |---|---|---|---|---|
-| F-1 | **CPU時間はチェーン合算か独立か** | スモークの `budget.chain_total_ms` と Workers Analytics の CPU 値を突き合わせ | 独立 / 合算 | ☐ |
-| F-2 | チェーン全体のCPU時間 | 同上 | ___ ms（上限10ms） | ☐ |
-| F-3 | **Service Binding は課金リクエストを別カウントするか** | スモークをN回叩き、Analytics のリクエスト増分を見る（+N か +3N か） | 別/同一 | ☐ |
-| F-4 | **静的アセットが 100k/日 を消費しないか** | シェルをN回ロードし、Analytics のリクエスト増分を見る | 消費する/しない | ☐ |
-| F-5 | 1リクエストあたりの subrequest 消費数 | data-api の D1/R2/DO 呼び出し数を数える（Free上限に対する余裕） | ___ | ☐ |
-| F-6 | Workers Logs の無償保持期間 | 一次情報 | ___ | ☐ |
-| F-7 | **課金額が $0 であること** | Cloudflare の Billing を確認 | $___ | ☐ |
+| F-1 | **CPU時間はチェーン合算か独立か** | Analytics の cpuTime を Worker ごとに読み、host の値が下流を含むかを見る（`measure-free-tier.ts`） | **未確定**。記録は Worker ごと（host の1回あたり 0.67・0.64 ms は下流の和より小さい）。上限を Worker ごとに判定するか合算するかは一次情報に無い（`06` §7 #1） | ⚠️ 未確定（下の処置を見る） |
+| F-2 | チェーン全体のCPU時間 | 同上＋期間の集計（`free-tier-report.ts`。3 Worker の max の和＝上界） | 続けて 20 回の上界 **6.51・5.28 ms**（`06` §7.1）。M0 期間（09-08〜09-14 UTC）の上界は **staging 9.52 ms・production 16.94 ms**。Worker 単体の max は **production の data-api 11.30 ms**（エラーなし。staging は 5.68 ms）。production の単発の `/healthz` 1 回でチェーン合計 16.47 ms（`06` §7.2） | ⚠️ **余裕 3 ms 未満**（production は単体でも −1.30 ms、合算なら −6.94 ms。staging は合算なら 0.48 ms）。下の処置を見る |
+| F-3 | **Service Binding は課金リクエストを別カウントするか** | `/healthz` を 20 回叩き、Analytics の Worker ごとの requests を見る（+N か +3N か） | **別**（Analytics 上。host への 1 回が 3 requests）。Free の 100k/日 がどちらで数えるかは一次情報に無い → **別カウントで見積もる（実効 33k/日）** | ✅ |
+| F-4 | **静的アセットが 100k/日 を消費しないか** | シェルを 20 回ロードし、Analytics の Worker の起動と Static Assets の requests を見る | **消費しない**（Worker の起動 0 回・0 回。一次情報とも一致） | ✅ |
+| F-5 | 1リクエストあたりの subrequest 消費数 | data-api の D1/R2/DO 呼び出し数を数え、Analytics の `sum.subrequests` と突き合わせる | **host 1・gateway 1・data-api 5（チェーン 7）**。Free 上限は1回の起動あたり 50 → 余裕 43（`06` §7 #7） | ✅ |
+| F-6 | Workers Logs の無償保持期間 | 一次情報 | **3 日**（Paid は 7 日）。P-1 の 7 日を覆えないので P-1 は Analytics で見る（`06` §7 #8） | ✅ |
+| F-7 | **課金額が $0 であること** | Cloudflare の Billing を確認 | $___（**確認待ち**。API では読めない。所有者がダッシュボードで確かめ、監督側が記入する） | ☐ |
 
 **F-1 が「合算」だった場合の処置**（先に決めておく）
 - ❌ gateway と data-api を統合する → **やらない**。企画書9章「Data APIが唯一の権限強制点」が崩れる
 - ✅ 余裕が 3ms 未満なら **Workers Paid $5 へ昇格**（`06` §5 P-1 の前倒し適用）。**アーキテクチャを課金プランに売らない**
+
+> **2026-09-14 の状態 — 監督側（人）の判断待ち。** F-1 は未確定のまま。ところが **production は、独立でも合算でも余裕 3 ms の線を割った**：
+> data-api が単体で 11.30 ms（余裕 −1.30 ms）、同じ 1 回のリクエストのチェーン合計は 16.47 ms。staging は合算のときだけ割る（上界の余裕 0.48 ms、単発 1 回でも 2.47 ms の回があった）。
+> この処置は「合算だった場合」の宣言で、未確定のとき・単体で超えたときの扱いは決めていない。上限を超えた記録はエラー（`exceededResources`）になっておらず、
+> **昇格トリガー P-1〜P-6 には触れていない**（`06` §7.2）。だからワーカーは昇格を決めずに、ここで人に返す。
 
 ---
 
