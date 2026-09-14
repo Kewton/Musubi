@@ -1,0 +1,124 @@
+name: rollback
+# production の Worker を、配備済みの版へ切り替える（04 §6.1・docs/runbook/rollback.md）。コードを巻き戻す一次手段（2026-09-14・#17 の決定）。
+#   🧑 承認 → 前提の確認 → 切り替え先の commit を引く → ① 切り替え（wrangler rollback）→ ② 貫通スモーク
+# **build も D1 マイグレーションも乖離チェックもしない。** 版は配った時点のコード・Static Assets・binding・secret を持っている。
+#
+# ── 使い方 ─────────────────────────────────────────────────────────────
+#   gh workflow run rollback.yml --ref <rollback.yml を含む v タグ（ふつうは最新）> -f to=<切り替え先の v タグ>
+# --ref は production 環境のデプロイ元の制限（v* タグ）を通すためのもので、このワークフローの定義はそのタグから読まれる。
+# to は古くても新しくてもよい（新しい版へ戻す＝復帰にも使う）。
+#   古い版へ戻す   … host → gateway → data-api の順（呼ぶ側を先に戻す）
+#   新しい版へ進める … data-api → gateway → host の順（配る順）
+# 各 Worker の版は、GIT_SHA（deploy の --var）が to の commit と一致するものを直近 10 版から探す（deploy-worker.ts --rollback-to）。
+# 1つでも見つからなければ何も切り替えずに落ちる → 二次手段（deploy-production.yml を to のタグで手動実行）。
+#
+# ── 起動 ──────────────────────────────────────────────────────────────
+# 手動実行（workflow_dispatch）だけ。v タグから起動したときだけ動く（前提の確認で落とす）。
+# ジョブは environment: production を宣言する。**必須レビュワー（Kewton）の承認があるまでジョブを始めない**。
+# concurrency は deploy-production.yml と同じ group。配っている途中に切り替えない（逆も）。
+#
+# ── 資格情報（CLAUDE.md「資格情報の置き場所」・04 §5）────────────────────────────
+# **production 環境の Secret**
+#     CLOUDFLARE_API_TOKEN_PROD / CLOUDFLARE_ACCOUNT_ID_PROD … ① だけ。wrangler には CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID として渡す
+#     SMOKE_BASE_URL / MUSUBI_PROBE_TOKEN                 … ② だけ（MUSUBI_PROBE_TOKEN は SMOKE_PROBE_TOKEN として。Worker には載せない）
+# **使わない**：R2 の3つ（乖離チェックが無い）・アカウント①の資格情報・TF_CLOUDFLARE_API_TOKEN_PROD
+#
+# ── public リポジトリなので（deploy-production.yml と同じ規律）──────────────────────────
+# - inputs.to を式で run に埋め込まない（シェルへの注入になる）。env で渡し、前提の確認で v タグの名前の形かを確かめる
+# - 資格情報は、それを使うステップの env にだけ渡す。**ジョブの env に置かない**。vars を使わない
+# - wrangler を直接呼ばない。deploy-worker.ts が出力をファイルに受け、版の ID・作成時刻・GIT_SHA と伏せた要約だけを出す
+#   （版とデプロイの記録は author_email を含む）
+# - smoke に --base-url を使わない。environment に url を書かない
+#
+# GitHub の Deployments に残る ref は起動したタグ（--ref）であり、切り替え先ではない。今どの版で動いているかはこのジョブのログで見る。
+# この形は infra/scripts/deploy-worker.test.ts が確かめる（並び・資格情報の置き場所・起動条件）。
+on:
+  workflow_dispatch:
+    inputs:
+      to:
+        description: 切り替え先の v タグ（例 v0.1.0）。build も D1 マイグレーションもしない
+        required: true
+        type: string
+
+# 取り消さない。deploy-production と同じ group で、配っている途中と切り替えている途中を重ねない。
+concurrency: { group: deploy-production, cancel-in-progress: false }
+
+# 読み取りだけ（切り替え先のタグを fetch する）。Cloudflare へは Secret のトークンで書く。
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    runs-on: ubuntu-latest
+    # 承認待ちの時間は含まない。切り替えは数十秒、smoke の再試行の上限（最悪 2分半）を含めた安全網
+    timeout-minutes: 15
+    # 🧑 必須レビュワーの承認待ちがここで入る。本番の Secret は production 環境にしか無いので、宣言しないと空になる
+    environment: production
+    steps:
+      # 値は渡さない。式の比較の結果（true / false）だけがこのステップに届く。to は形を確かめるまで表示しない。
+      - name: 前提の確認（v タグから起動したこと・to が v タグの名前であること・Secret が揃っていること）
+        env:
+          REF: ${{ github.ref }}
+          TO: ${{ inputs.to }}
+          HAS_CLOUDFLARE_API_TOKEN_PROD: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD != '' }}
+          HAS_CLOUDFLARE_ACCOUNT_ID_PROD: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD != '' }}
+          HAS_MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN != '' }}
+          HAS_SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL != '' }}
+        run: |
+          case "$REF" in
+            refs/tags/v*) ;;
+            *)
+              echo "::error::production を切り替えるのは v タグから起動したときだけ。手動実行で rollback.yml を含む v タグを選ぶ"
+              exit 1
+              ;;
+          esac
+          if [[ ! "$TO" =~ ^v[0-9A-Za-z][0-9A-Za-z._-]{0,62}$ ]]; then
+            echo "::error::to は v タグの名前（例 v0.1.0）。値は表示しない"
+            exit 1
+          fi
+          missing=0
+          for name in CLOUDFLARE_API_TOKEN_PROD CLOUDFLARE_ACCOUNT_ID_PROD MUSUBI_PROBE_TOKEN SMOKE_BASE_URL; do
+            has="HAS_${name}"
+            if [ "${!has}" != true ]; then
+              echo "::error::${name} が空。production 環境の Secret が未登録"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/checkout@v4
+
+      # 切り替え先の commit。deploy-production は github.sha を GIT_SHA として配っているので、タグが指す commit と照合できる
+      - name: 切り替え先の commit を引く（to の v タグ）
+        id: to
+        env:
+          TO: ${{ inputs.to }}
+        run: |
+          git fetch --no-tags --depth=1 origin "+refs/tags/${TO}:refs/tags/${TO}" \
+            || { echo "::error::タグ ${TO} を取れない（push されていないタグ？）"; exit 1; }
+          sha="$(git rev-parse --verify "refs/tags/${TO}^{commit}")"
+          echo "切り替え先: ${TO} = ${sha}"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version-file: .node-version, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+
+      # ── ① 切り替え：版を読んで順を決め、wrangler rollback で1つずつ切り替える（deploy-worker.ts 冒頭「巻き戻し」）──────
+      # 見つからない・向きが混ざっているなら、何も切り替えずに落ちる。途中で落ちたら、同じ to でもう一度実行すると続きから切り替える
+      - name: ① 切り替え（古い版へは host → gateway → data-api、新しい版へは data-api → gateway → host）
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
+          TO_SHA: ${{ steps.to.outputs.sha }}
+        run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --rollback-to "$TO_SHA"
+
+      # ── ② 貫通スモーク（03 §5）。host の version が to の commit であることを確かめる ──────────────
+      # 版は配った時点の MUSUBI_PROBE_TOKEN を持つ。その後に合言葉を変えていれば、ここが「詳細が隠された応答」で落ちる（runbook）
+      - name: ② 貫通スモーク（host → gateway → data-api → D1 / R2 / DO）
+        env:
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+          SMOKE_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          TO_SHA: ${{ steps.to.outputs.sha }}
+        run: pnpm smoke --env production --expect-sha "$TO_SHA"
