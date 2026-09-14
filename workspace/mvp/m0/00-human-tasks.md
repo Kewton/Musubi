@@ -48,7 +48,11 @@
 - [x] 🧑 **2FA を有効化** — **2026-09-12 完了**。ログイン単位なので①②の両方に効く
 - [x] **アカウント②の Account ID** を控える — GitHub Variable `CLOUDFLARE_ACCOUNT_ID_PROD` と `.env` に登録済み（2026-09-12）
 
-> **② では R2 を有効化しない。** tfstate は①のバケット1つで足りる（backend 認証と provider 認証は別系統）。②で有効化すると使わない従量課金契約が増えるだけ。
+> **訂正（2026-09-14・#4）：② でも R2 を有効化した。** tfstate の置き場は①のバケット1つで足りる（backend 認証と provider 認証は別系統）が、
+> **production のアプリ用バケット（BUNDLES / UPLOADS）は資源と同じアカウント②に作る**（`musubi-env` モジュール）。
+> 当初の「② では R2 を有効化しない」は tfstate だけを見た判断で、この2つが漏れていた。②が未有効のまま apply すると
+> D1・Queue・KV だけ作られて R2 で失敗する（API は `10042 Please enable R2 through the Cloudflare Dashboard` を返した）。
+> 🧑 本人が②で R2 の利用契約を追加（2026-09-14）。条件は①と同じ無料枠付き従量課金。**②で R2 の S3 キーは作らない**（state は①）。
 
 > **M0 が Free で足りる根拠**（詳細は [`06-plan-and-limits.md`](./06-plan-and-limits.md) §2）
 > Workers・SQLite型 Durable Objects・D1・R2・Queues はすべて Free で使える。**M0で有償が要るコンポーネントは1つも無い。**
@@ -209,7 +213,7 @@ pnpm exec wrangler whoami    # どのアカウントに繋がっているか確�
 
 - [x] R2 の利用状態を確認し、無料枠と超過料金について本人承認を得て申込みを確定（**2026-09-08：既存アカウントで有効化済み**）
 - [x] R2 で `musubi-tfstate` バケットを作成（APAC・Standard・Public Access Disabled）
-- [ ] state のバックアップ・復元手順を用意する（R2 はバケットバージョニング未対応。apply 前後の state を別キーに退避し、`02` 実装時に復元検証する）
+- [x] state のバックアップ・復元手順を用意する（R2 はバケットバージョニング未対応。apply 前後の state を別キーに退避し、`02` 実装時に復元検証する）— **2026-09-14・#4**：`infra/scripts/tfstate-backup.sh`（手順は `infra/terraform/README.md` §3）。staging / production の apply 前後で実行し、`verify` で復元に使えることを確認
 - [x] S3互換の **Access Key ID / Secret Access Key** を発行（Account API Token名：`musubi-tfstate`。`Object Read & Write`、対象バケットのみ、期限2026-12-07、IP制限なし）
 - [x] R2 の S3 エンドポイントを `.env` とGitHub Variable `R2_S3_ENDPOINT` に保存
 - [x] S3疎通を検証（一時オブジェクトの一覧・書込み・読取り・削除成功）。再検証：`python3 workspace/mvp/m0/scripts/verify-r2-credentials.py`

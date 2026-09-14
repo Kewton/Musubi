@@ -70,7 +70,7 @@ git commit -m "chore: <env> の apply 後に wrangler.jsonc を terraform output
 > D1 は作り直すと `database_id` が変わる（§4）。**dev の destroy → apply のたびにも同じ手順が要る。**
 
 **staging / production も同じ手順で、違うのは次の行だけ。** backend（state）は3環境ともアカウント①なので、
-`AWS_*` の3行は変えない。apply は Issue #4（production は 🧑 承認必須）。
+`AWS_*` の3行は変えない。staging / production の apply は人が立ち会って手元から行い、前後で state を退避する（§3。初回は Issue #4）。
 
 | 環境 | `cd` | provider 認証 | アカウント ID |
 |---|---|---|---|
@@ -99,7 +99,36 @@ production だけ変数名を `account_id_prod` に分けてある（`02` §9）
   **CI で `terraform init` する時も同じ環境変数が要る**（`04` §3 のワークフローに足すこと）
 - ロックは R2 の条件付き PUT を使う `use_lockfile = true`。DynamoDB は使わない（使えない）。
   Terraform 1.16.2 × R2 で init / plan / apply / destroy が通ることを実測した
-- R2 はバージョニング未対応。apply 前後の state 退避・復元手順は Issue #4 で実装する
+- R2 はバージョニング未対応。**apply の前後に state を同じバケットの別キーへ退避する**（Issue #4）
+
+### state の退避と復元（`infra/scripts/tfstate-backup.sh`）
+
+staging / production の apply は、必ずこの順で行う。§2 の資格情報を読み込んだシェルで実行する。
+
+```bash
+./infra/scripts/tfstate-backup.sh backup <env> pre-apply     # → backups/<env>/<UTC>-pre-apply.tfstate
+terraform -chdir=infra/terraform/envs/<env> plan -out=tfplan  # 中身を読んでから
+terraform -chdir=infra/terraform/envs/<env> apply tfplan
+terraform -chdir=infra/terraform/envs/<env> plan -detailed-exitcode   # exit 0
+./infra/scripts/tfstate-backup.sh backup <env> post-apply
+./infra/scripts/tfstate-backup.sh verify <env> <list で出た post-apply のキー>
+```
+
+| サブコマンド | すること | 使う資格情報 |
+|---|---|---|
+| `backup` | `state pull` した内容を `backups/<env>/` へ置き、読み戻して sha256 の一致を確かめる | R2 の3つ |
+| `verify` | 退避物を一時キー（`restore-check/<env>/`）へ置き、**別の作業領域**でそこを backend にして `plan -detailed-exitcode`。exit 0 なら復元に使える。一時キーは最後に消す。**本物のキーには読み書きしない** | R2 の3つ＋provider の認証 |
+| `list` | 退避物の一覧 | R2 の3つ |
+
+- 表示するのはキー・sha256・serial・資源数だけ。state 本体（account_id を含む）と endpoint URL は出さない
+- `verify` が差分を検出することは実測で確かめた（2026-09-14、dev：退避物から Queue を1つ外した版は `1 to add` で exit 1）
+
+**本当に戻すとき**は取り返しがつかないので、スクリプトにせず人が立ち会って手で行う。
+
+1. 今の state もまず `backup` で退避する（戻し先を失わないため）
+2. 戻したい退避物を `verify` にかけ、exit 0 を確かめる
+3. 退避物を手元へ取り出し、`terraform -chdir=infra/terraform/envs/<env> state push <file>` で戻す
+4. `terraform plan -detailed-exitcode` が exit 0 になることを確かめる
 
 ---
 
@@ -174,12 +203,15 @@ terraform destroy -auto-approve && terraform apply -auto-approve
 | 環境 | アカウント | state key | 状態 |
 |---|---|---|---|
 | `envs/dev` | ① | `dev/terraform.tfstate` | **apply 済み**（Issue #2） |
-| `envs/staging` | ① | `staging/terraform.tfstate` | 定義済み・**未 apply**。apply は Issue #4 |
-| `envs/production` | ② | `production/terraform.tfstate` | 定義済み・**未 apply**。apply は Issue #4（🧑 承認必須） |
+| `envs/staging` | ① | `staging/terraform.tfstate` | **apply 済み**（Issue #4・2026-09-14。5 added、直後の plan は No changes） |
+| `envs/production` | ② | `production/terraform.tfstate` | **apply 済み**（Issue #4・2026-09-14。🧑 立ち会い。5 added、直後の plan は No changes） |
 
 構成は3環境とも**同一モジュール**で、差分は引数だけ（アカウント ID / `env` / `wfp_enabled`。
 `custom_domain_enabled` は H-04 のドメイン取得後に足す）。`CLOUDFLARE_API_TOKEN` は環境ごとに切り替える
 （手元では `.env` の `TF_CLOUDFLARE_API_TOKEN_PROD` を使う。**CI では production の plan を回さず**、`TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置いていない。`04` §3）。
+
+> **アカウント②では R2 の利用契約が要る**（production の BUNDLES / UPLOADS を②に作るため。2026-09-14 に追加）。
+> 未契約のまま apply すると D1・Queue・KV だけ作られて R2 で失敗する。新しいアカウントに環境を足すときは、先に R2 を有効にすること。
 
 ---
 

@@ -265,7 +265,7 @@ terraform output -json bindings
 ## 9. staging / production
 
 - 構成は dev と**同一モジュール**。差分は tfvars のみ（`custom_domain_enabled`, `wfp_enabled`, DNS名, `account_id`）
-- `production` の apply は **🧑 人間の承認必須**（GitHub Environments の required reviewers 経由、`04` §5）
+- `production` の apply は **🧑 人間の承認必須**。CI からは apply しない。人が立ち会って手元から行い、前後で state を退避する（`infra/terraform/README.md` §3。2026-09-14 の初回は #4）
 - `terraform plan` は PR時に自動実行し、**plan結果をPRコメントに貼る**（`04` §3）
 
 ### 🧑 H-14 で production を別アカウントにした場合
@@ -305,6 +305,6 @@ terraform {
 
 - [ ] `envs/dev`・`envs/staging`・`envs/production` の3つが `terraform plan` を通る
 - [ ] dev で destroy→apply の往復が成功（Issue #1 クローズ）
-- [ ] staging / production が apply 済み
-- [ ] `terraform plan` が3環境すべてで **No changes**（＝ドリフトなし）
+- [x] staging / production が apply 済み（2026-09-14・#4）
+- [x] `terraform plan` が3環境すべてで **No changes**（＝ドリフトなし。2026-09-14 に3環境とも exit 0 を実測）
 - [ ] `infra/terraform/README.md` に「何をTerraformが持ち、何を持たないか」の表がある

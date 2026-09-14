@@ -65,7 +65,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musubi-staging-control",
-          "database_id": "<TF_OUTPUT>",
+          "database_id": "792a1ec4-1ce4-44a0-9876-fe73d9e113fe",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
@@ -82,7 +82,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musubi-production-control",
-          "database_id": "<TF_OUTPUT>",
+          "database_id": "d399849e-6c20-4f23-98f0-88e05fc502af",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
