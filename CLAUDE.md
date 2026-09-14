@@ -45,6 +45,7 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 |---|---|
 | リポジトリ Secret | dev/staging のトークン、R2 の鍵、**`CLOUDFLARE_ACCOUNT_ID`**、**`R2_S3_ENDPOINT`** |
 | **`production` 環境 Secret** | **`CLOUDFLARE_API_TOKEN_PROD`**、**`CLOUDFLARE_ACCOUNT_ID_PROD`** |
+| **`staging` 環境 Secret** | **`SMOKE_BASE_URL`**（staging の host の workers.dev のオリジン。`deploy-staging` の貫通スモークの宛先） |
 | GitHub に置かない | `TF_CLOUDFLARE_API_TOKEN_PROD`（production への apply は人が手元から） |
 | リポジトリ Variable | 公開してよい値だけ（`TFSTATE_BUCKET` など） |
 
@@ -52,6 +53,8 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 - **本番の資格情報をリポジトリ全体の Secret にしない。** `pull_request` のワークフローは PR 側のブランチの定義で
   動くので、ワークフローを書き換えた PR から届いてしまう。`production` 環境（`v*` タグ・承認必須）に閉じ込める
 - **PR で production の plan を回さない**（`04` §3）
+- **workers.dev の URL を Variable にも CI のコマンド行にも出さない。** サブドメインがログに載る。貫通スモークの宛先は Secret から環境変数で渡し
+  （`--base-url` を使わない）、`wrangler deploy` の出力は `infra/scripts/deploy-worker.ts` を通してホスト名を伏せる（`04` §4）
 
 ## 手順
 

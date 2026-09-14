@@ -16,8 +16,11 @@
   //   wrangler deploy はそれを .wrangler/deploy/config.json 経由で読む。
   //   **env はビルド時に決まる。** CLOUDFLARE_ENV=<env> で選び、未指定なら dev（vite.config.ts）。
   //   wrangler deploy --env <env> は、ビルドした env と食い違えば失敗する（別 env の設定で配らない）。
-  //   ⚠️ turbo（pnpm build / deploy:*）は CLOUDFLARE_ENV をタスクへ渡さない（turbo.json の env に無い）ので、その経路のビルドは常に dev。
-  //     staging / production へ配るときは apps/host で CLOUDFLARE_ENV=<env> pnpm build してから wrangler deploy --env <env> する。
+  //   turbo も host の build に CLOUDFLARE_ENV を渡し、キャッシュの鍵に入れる（apps/host/turbo.json）。だから、リポジトリ直下の
+  //   `CLOUDFLARE_ENV=<env> pnpm build` でよい。ルートの deploy:staging / deploy:production と CD（deploy-staging.yml。04 §4）も、
+  //   配る env と同じ CLOUDFLARE_ENV を付けてビルドする。
+  //   ⚠️ ビルドの出力のディレクトリ名は env によらず dist/musubi_dev_host（トップレベルの name から作られる）。
+  //     どの env でビルドしたかは、その中の wrangler.json の targetEnvironment を見る。
   //
   // ── /healthz の詳細を誰に返すか（03 §5「セキュリティ上の注意」。gateway と同じ形）──────────
   //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musubi-Probe ヘッダが

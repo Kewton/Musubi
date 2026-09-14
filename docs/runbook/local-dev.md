@@ -37,7 +37,14 @@ pnpm build
 ```
 
 - gateway は `@musubi/data-api` の、data-api は `@musubi/app-do` の `dist/` を import する。ビルドしないと起動しない
-- host は `vite build` の出力（`apps/host/dist/`）を並べる。`pnpm build`（turbo）経由のビルドは常に env.dev になる（`apps/host/wrangler.jsonc` 冒頭）
+- host は `vite build` の出力（`apps/host/dist/`）を並べる。host は**ビルドの時点で** `CLOUDFLARE_ENV` によって env が決まり、未指定なら env.dev（`apps/host/wrangler.jsonc` 冒頭）。
+  turbo はこの値を host の build へ渡すので（`apps/host/turbo.json`）、**`CLOUDFLARE_ENV` を付けずに**打つ。シェルに `CLOUDFLARE_ENV=staging` などが残っていると staging のビルドになる
+- staging / production 向けにビルドした後でも、`CLOUDFLARE_ENV` 無しで `pnpm build` をやり直せば env.dev の出力に戻る（キャッシュの鍵に env が入るので、別のキャッシュが当たるか作り直す）。
+  出力のディレクトリ名は env によらず `musubi_dev_host` なので、名前では見分けられない。中身の env はこれで確かめる（`dev` と出る）
+
+  ```bash
+  node -p 'require("./apps/host/dist/musubi_dev_host/wrangler.json").targetEnvironment'
+  ```
 
 ### 1.3 D1 にマイグレーションを当てる
 

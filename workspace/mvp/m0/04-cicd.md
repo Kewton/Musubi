@@ -14,7 +14,7 @@
 |---|---|---|---|
 | `.github/workflows/ci.yml` | PR / push to main | lint・typecheck・unit・PRタイトル検査 | なし |
 | `.github/workflows/infra-plan.yml` | PR（`infra/**` 変更時） | `terraform plan` を3環境ぶん実行しPRコメント | なし |
-| `.github/workflows/deploy-staging.yml` | push to `main` | D1 migration → deploy → smoke | なし（自動） |
+| `.github/workflows/deploy-staging.yml` | push to `main` ／ 手動（`workflow_dispatch`。main のみ） | 乖離チェック → D1 migration → deploy → smoke | なし（自動） |
 | `.github/workflows/deploy-production.yml` | tag `v*` | D1 migration → deploy → smoke | 🧑 **required reviewer** |
 | `.github/workflows/rollback.yml` | 手動（`workflow_dispatch`） | 指定タグへ巻き戻し | 🧑 **required reviewer** |
 
@@ -162,65 +162,40 @@ terraform-plan  … 上の結果を1つに畳む集約ジョブ。★必須チ�
 
 ## 4. staging 自動デプロイ（`deploy-staging.yml`）
 
-```yaml
-name: deploy-staging
-on:
-  push: { branches: [main] }
+> **2026-09-14 訂正（Issue #15 の実装時）**：旧版のワークフロー例には、そのまま写すと落ちる・漏れる箇所が4つあった。
+>
+> | # | 旧版 | 何が起きるか | 訂正 |
+> |---|---|---|---|
+> | 1 | `pnpm build` → host で `wrangler deploy --env staging` | host は**ビルドの時点で** `CLOUDFLARE_ENV` によって env が決まる（未指定なら dev）。turbo が値をタスクへ渡さないので dev でビルドされ、wrangler が env の食い違いで **exit 1**。さらにキャッシュが当たると配備用の設定（`.wrangler/deploy/`）が戻らず、``The `assets` property … missing the required `directory` property.`` でも落ちる | `apps/host/turbo.json` で build に `CLOUDFLARE_ENV` を渡し、outputs に `.wrangler/deploy/**` を足す。ワークフローは `CLOUDFLARE_ENV=staging` を付けてビルドする |
+> | 2 | `wrangler deploy` の出力をそのままログへ流す | 配備後に **workers.dev の URL（アカウントのサブドメイン）** を表示する（wrangler 4.131.1 のソースで確認）。公開の CI ログに載る | `infra/scripts/deploy-worker.ts` が出力をファイルに受け、ホスト名を伏せた要約だけを出す（下の「wrangler の出力を伏せる」） |
+> | 3 | Cloudflare のトークンをジョブの `env` に置く | ⓪ の乖離チェック（渡さないと決めた）や install・build のステップにまで届く | 資格情報は使うステップの `env` にだけ渡す |
+> | 4 | 貫通スモークの宛先の置き場所が無い | `SMOKE_BASE_URL` が空で ③ が落ちる。配った後に気づく | **staging 環境の Secret**。ジョブに `environment: staging` を宣言し、最初のステップで空かどうかを確かめる |
 
-concurrency: { group: deploy-staging, cancel-in-progress: false }
+**正本は `.github/workflows/deploy-staging.yml`。** §3 と同じ理由で、ここにワークフローの全文を複製しない。
+並び・資格情報の置き場所・起動条件は `infra/scripts/deploy-worker.test.ts` が確かめる。
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: staging
-    env:
-      CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN }}'
-      CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version-file: .node-version, cache: pnpm }
-      - run: pnpm install --frozen-lockfile
-
-      # ⓪ デプロイ直前の乖離チェック（2026-09-13 決定・03 §3）
-      #    wrangler.jsonc の Terraform 由来の欄が、staging の実物（state）と一致しなければデプロイしない。
-      #    必要なのは tfstate の backend（R2）の資格情報だけ。Cloudflare のトークンは使わない。
-      - id: tfver
-        run: echo "version=$(tr -d '[:space:]' < .terraform-version)" >> "$GITHUB_OUTPUT"
-      - uses: hashicorp/setup-terraform@v4
-        with: { terraform_version: '${{ steps.tfver.outputs.version }}', terraform_wrapper: false }
-      - name: 乖離チェック（wrangler.jsonc ⇔ terraform output）
-        env:
-          CHECKPOINT_DISABLE: "1"
-          AWS_ACCESS_KEY_ID:     '${{ secrets.R2_ACCESS_KEY_ID }}'
-          AWS_SECRET_ACCESS_KEY: '${{ secrets.R2_SECRET_ACCESS_KEY }}'
-          AWS_ENDPOINT_URL_S3:   '${{ secrets.R2_S3_ENDPOINT }}'
-        run: |
-          # init の stderr は endpoint URL（アカウント ID を含む）を出しうるので捨てる。public リポジトリの CI ログは公開される
-          terraform -chdir=infra/terraform/envs/staging init -input=false -lockfile=readonly -no-color >/dev/null 2>&1 \
-            || { echo "::error::terraform init に失敗（詳細はログに出さない。手元で同じ手順を再現すること）"; exit 1; }
-          pnpm infra:sync --env staging --check
-
-      - run: pnpm build
-
-      # ① D1マイグレーション（デプロイより先。前方互換規律が前提 → docs/runbook/d1-migration.md §3・§4）
-      #    SQL は packages/control-plane/migrations、当てる先は data-api の設定の CONTROL_DB（03 §7・2026-09-14 決定）。
-      #    control-plane には wrangler の設定が無いので working-directory では当たらない。リポジトリ直下から --config で指す。
-      #    --remote は database_id が実物でないと当たらない。⓪ の乖離チェックが先にあるのはそのため
-      - run: pnpm exec wrangler d1 migrations apply CONTROL_DB --env staging --config packages/data-api/wrangler.jsonc --remote
-
-      # ② デプロイ順序：依存の末端から。data-api → gateway → host
-      - run: pnpm exec wrangler deploy --env staging --var GIT_SHA:'${{ github.sha }}'
-        working-directory: packages/data-api
-      - run: pnpm exec wrangler deploy --env staging --var GIT_SHA:'${{ github.sha }}'
-        working-directory: apps/gateway
-      - run: pnpm exec wrangler deploy --env staging --var GIT_SHA:'${{ github.sha }}'
-        working-directory: apps/host
-
-      # ③ 貫通スモーク（03 §5）。落ちたらデプロイ失敗として扱う
-      - run: pnpm smoke --env staging --expect-sha '${{ github.sha }}'
 ```
+前提の確認     … main であること・使う Secret が空でないこと（値は渡さない。式で比べた true / false だけを渡す）
+install
+⓪ 乖離チェック … terraform init（出力は stderr ごと捨てる）→ pnpm infra:sync --env staging --check。乖離があれば何も配らない
+build          … CLOUDFLARE_ENV=staging pnpm build
+① migration    … deploy-worker.ts --env staging --target migrate
+② deploy       … deploy-worker.ts --env staging --target data-api → gateway → host（--sha <commit>）
+③ smoke        … pnpm smoke --env staging --expect-sha <commit>（宛先は環境変数 SMOKE_BASE_URL）
+④ 所要時間     … main の push から smoke green までを測ってジョブの要約に残し、10分を超えたら警告する（落とさない）
+```
+
+| 規則 | 理由 |
+|---|---|
+| 起動は main への push と `workflow_dispatch` だけ。手動実行でも main 以外は前提の確認で落とす | staging は main の姿。PR の段階では実環境に書き込まない（下の「PR での確かめ方」） |
+| `concurrency` は取り消さない（`cancel-in-progress: false`） | migration の後・deploy の前などで止めない。待ちが重なれば GitHub が最新の1つだけを残す |
+| `permissions` は `contents: read` だけ | Cloudflare へは Secret のトークンで書く。GITHUB_TOKEN に書き込みは要らない |
+| **資格情報は使うステップの `env` にだけ渡す**（ジョブの `env` にしない） | Cloudflare のトークンと Account ID は ① ②、tfstate の backend（R2）の3つは ⓪、`SMOKE_BASE_URL` は ③。⓪ に Cloudflare のトークンは要らない（`terraform output` は backend しか読まない。実測済み） |
+| `vars` を使わない | Account ID・R2 のエンドポイント・workers.dev の URL はどれも Secret（§3.1） |
+| **`SMOKE_BASE_URL` は staging 環境の Secret**。smoke に `--base-url` を使わない | Variable はステップの env 表示に平文で出る。pnpm はコマンド行を引数ごとログに出す |
+| `environment` に `url` を書かない | デプロイの記録に載り、誰でも読める |
+| wrangler を直接呼ばない。`deploy-worker.ts` を通す | 下の「wrangler の出力を伏せる」 |
+| host は配る env の `CLOUDFLARE_ENV` を付けてビルドする | 下の「host は build 時に env が決まる」 |
 
 **デプロイ順序が data-api → gateway → host である理由**：Service Binding は「呼ぶ側」が「呼ばれる側」の存在を要求する。末端から配れば、途中の瞬間も常に整合が取れている。
 
@@ -228,11 +203,70 @@ jobs:
 **1つ前のリリースのコードが新しいスキーマで動く**形でしかスキーマを変えない（前方互換規律。`docs/runbook/d1-migration.md` §4）。
 ② が落ちても、§6 でコードを巻き戻しても、同じ状態になる。
 
-> **宣言した線：main merge → smoke green まで ≤ 10分**（README §5）。
+**⓪ が ① より先である理由**：`--remote` は `database_id` が実物でないと当たらない。乖離していれば何も配らずに止める（`03` §3）。
+
+> **宣言した線：main merge → smoke green まで ≤ 10分**（README §5）。④ が毎回測る（起点は push イベントの `repository.pushed_at`。キューの待ちを含む）。
+
+### host は build 時に env が決まる（2026-09-14 決定）
+
+host（TanStack Start ＋ @cloudflare/vite-plugin）は `vite build` の時点で `CLOUDFLARE_ENV` によって wrangler.jsonc の `env.<env>` を解決し、
+ビルドの出力に書き込む。`wrangler deploy` はその出力を読むので、**ビルドした env と `--env` が食い違えば wrangler が落とす**（別 env を黙って配ることはない）。
+
+- **`apps/host/turbo.json`**（host だけの turbo の設定）で、build の `env` に `CLOUDFLARE_ENV` を書く。turbo は既定（strict）で `env` に無い環境変数をタスクへ渡さない。書くとキャッシュの鍵にも入り、env ごとに別の出力になる
+- 同じ設定の `outputs` に `.wrangler/deploy/**`（vite build が書く配備用の設定）を足す。package の `outputs` はルートの `outputs` を置き換えるので、ルートの2つも並べる
+- ワークフローは `CLOUDFLARE_ENV=staging` を付けて `pnpm build` する。ルートの `deploy:staging` / `deploy:production` も同じ env でビルドする（`CLOUDFLARE_ENV=<env> turbo run deploy …`）。`deploy:dev` は未指定＝dev のまま
+- ビルドの出力のディレクトリ名は env によらず `apps/host/dist/musubi_dev_host`（トップレベルの `name` から作られる）。どの env でビルドしたかは中の `wrangler.json` の `targetEnvironment` を見る
+
+### wrangler の出力を伏せる（`infra/scripts/deploy-worker.ts`）
+
+`wrangler deploy` は配備後に workers.dev の URL を表示する。サブドメインが公開の CI ログに載ると、無償枠（100k req/日）を他人に消費させる入口になる（`pnpm smoke` が URL を出さないのと同じ理由）。
+deploy と D1 マイグレーションは wrangler を直接呼ばず、次の形で動かす。
+
+- wrangler の標準出力と標準エラーは**ファイル**（`$RUNNER_TEMP/deploy-worker-<env>-<target>.log`）に受ける。**アーティファクトにしない**（公開される）
+- 成功したら、**許した行だけ**（アセットの upload・upload の大きさ・binding の表・配備先・Version ID／マイグレーションの表と当てた先）を伏せてから出す。知らない行に何が載るかは保証できないので、伏せる処理だけに頼らない
+- 失敗したら、全文を伏せてから出す（原因が読めないと直せない）
+- 伏せるもの：workers.dev のホスト名（サブドメインの段をすべて）、Account ID の形（32桁の16進）と `CLOUDFLARE_ACCOUNT_ID` の値。ANSI エスケープは先に取り除く（色の切り替えがホスト名を割る・OSC 8 のリンクが URL を運ぶ）。行頭の `::` は崩す（ワークフローコマンドとして読ませない）
+- 伏せ方は `deploy-worker.test.ts` が確かめる。作り物の出力（色で割ったホスト名・OSC 8 のリンク・プレビュー URL・API のパスの Account ID・行頭の `::`）と、実物の wrangler の `--dry-run` の出力で
+
+### `--var GIT_SHA`
+
+`wrangler deploy --var GIT_SHA:<sha>` は、vite-plugin のビルド出力に対しても設定の `"local"` を上書きする。
+dry-run の binding の表で、`--var` を付けると `env.GIT_SHA ("(hidden)")`、付けないと `env.GIT_SHA ("local")` と出る（2026-09-14 実測。gateway と host）。
+最終確認は初回デプロイの ③（`--expect-sha`）。
+
+### PR での確かめ方（実環境に書き込まない）
+
+PR の段階では Cloudflare に何も配らない。`CLOUDFLARE_ENV=staging` でビルドした3つの Worker に `wrangler deploy --dry-run --env staging` を当てて確かめた。
+
+**2026-09-14・main = `06bfc4b`・wrangler 4.131.1・turbo 2.10.12・@cloudflare/vite-plugin 1.54.8**
+
+| 確かめたこと | 手順 | 結果 |
+|---|---|---|
+| turbo が host の build に env を渡す | `CLOUDFLARE_ENV=staging pnpm exec turbo run build --filter @musubi/host --force` | 出力は `musubi-staging-host`（`targetEnvironment: staging`）。`apps/host/turbo.json` を外すと `musubi-dev-host` |
+| キャッシュ復元でも配備用の設定が戻る | `apps/host/dist` と `apps/host/.wrangler` を消して同じビルド（cache hit） | `.wrangler/deploy/config.json` が戻る。続けて `pnpm deploy:staging --dry-run` で host も exit 0 |
+| env 未指定は dev | `CLOUDFLARE_ENV` 無しで同じビルド | 鍵が変わって cache miss、出力は `musubi-dev-host` |
+| 3つの Worker を staging として配れる | 各 Worker で `wrangler deploy --dry-run --env staging --var GIT_SHA:<sha>`（`WRANGLER_LOG=debug`） | 3つとも exit 0。Cloudflare API へのリクエスト（`START CF API REQUEST`）は 0 件。host の GATEWAY → `musubi-staging-gateway` |
+| ルートの `deploy:staging` / `deploy:production` | `pnpm deploy:<env> --dry-run`（後ろの引数は wrangler deploy に渡る） | どちらも exit 0。host の GATEWAY は `musubi-<env>-gateway`、production は `HEALTHZ_DETAIL: "probe"` |
+| 別 env のビルドは配らない | staging でビルドした host に `--env production` の dry-run | exit 1（`This does not match the target environment "staging"`） |
+| ワークフローの構文 | `actionlint`（shellcheck 込み） | 指摘 0 |
+
+### 初回デプロイ（Issue #15 の PR をマージした時点で走る。🧑 立ち会う）
+
+前提（🧑 **マージ前**）：GitHub に `staging` 環境を作り、Secret `SMOKE_BASE_URL`（staging の host の workers.dev のオリジン）を登録する。
+無ければ前提の確認で落ち、何も配らない。
+
+立ち会って確かめること：
+
+- [ ] ① ② が CI のトークンで書き込める（読み取りは確認済み）
+- [ ] ③ が `--expect-sha` で green になる（`--var GIT_SHA` の最終確認）
+- [ ] ④ の所要時間が 10分以内（§8「main→staging ≤ 10分を実測し記録した」）
+- [ ] ログに workers.dev のホスト名と Account ID が出ていない
 
 ---
 
 ## 5. production デプロイ（`deploy-production.yml`）
+
+**§4 と同じ形**にする（Issue #16）。違うのは env と、起動・承認・資格情報の置き場所だけ。
 
 ```yaml
 name: deploy-production
@@ -241,21 +275,29 @@ on:
 
 concurrency: { group: deploy-production, cancel-in-progress: false }
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: production        # ← 🧑 required reviewer による承認待ちがここで入る
-    env:
-      # ★ この2つは **production 環境の Secret**（2026-09-14）。リポジトリ全体には置いていないので、
-      #   environment: production を宣言し、v* タグで起動し、Kewton が承認したこのジョブからしか読めない
-      CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}'
-      CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}'
     steps:
-      # staging と同一手順。--env production に読み替え
-      # ① の D1 マイグレーションも --env production だけを変える（SQL の置き場と --config は staging と同じ）
-      # ⓪ の乖離チェックも同じ形で `envs/production` と `--env production` に読み替える。
-      #    backend（state の置き場）は production でもアカウント①の R2 なので、R2 の資格情報は staging と同じ
-      # 最後に smoke --env production
+      # staging（deploy-staging.yml・§4）と同一手順。env を production に読み替える
+      #   build     … CLOUDFLARE_ENV=production pnpm build（host は build 時に env が決まる。§4）
+      #   ① migrate … deploy-worker.ts --env production --target migrate（SQL の置き場と --config は staging と同じ）
+      #   ② deploy  … deploy-worker.ts --env production --target data-api → gateway → host（--sha <commit>）
+      #   ⓪ の乖離チェックも同じ形で `envs/production` と `--env production` に読み替える。
+      #      backend（state の置き場）は production でもアカウント①の R2 なので、R2 の資格情報は staging と同じ
+      #   最後に smoke --env production
+      #
+      # ★ ① ② のステップの env にだけ、次の2つを渡す（ジョブの env にしない。§4）。
+      #   この2つは **production 環境の Secret**（2026-09-14）。リポジトリ全体には置いていないので、
+      #   environment: production を宣言し、v* タグで起動し、Kewton が承認したこのジョブからしか読めない
+      #     CLOUDFLARE_API_TOKEN:  '${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}'
+      #     CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}'
+      # ★ production の host は X-Musubi-Probe が無いと /healthz の詳細を返さない。③ には SMOKE_PROBE_TOKEN も
+      #   production 環境の Secret から渡す（infra/scripts/smoke.ts 冒頭）
 ```
 
 **リリース手順（人間の操作）**
