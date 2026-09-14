@@ -1,0 +1,60 @@
+{
+  // gateway の境界 lint。**D1 / R2 / DO を直接触らない**（CLAUDE.md 不変条件・01 §3.2「禁止する依存」）。
+  //
+  // oxlint は lint するファイルに一番近い設定を使う。`oxlint src`（package.json の lint）でも、
+  // リポジトリのルートから oxlint を回しても、src/ 配下にはこのファイルが効く。
+  // ルートの .oxlintrc.json を extends するが、**同じルールは上書きになり合成されない**。
+  // だから no-restricted-imports にはルートの cloudflare:workers も書き直してある。
+  //
+  // これが空振りしていないことは src/lint.test.ts が、違反を書いたファイルを実際に lint して確かめる。
+  "$schema": "https://raw.githubusercontent.com/oxc-project/oxc/main/npm/oxlint/configuration_schema.json",
+  "extends": ["../../../.oxlintrc.json"],
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["cloudflare:workers"],
+            "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
+          },
+          {
+            "group": ["@musubi/app-do", "@musubi/app-do/**"],
+            "message": "gateway は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。data-api を Service Binding（DATA_API）で呼ぶ"
+          },
+          {
+            "group": ["@musubi/data-api/**", "**/packages/**"],
+            "message": "data-api の中身（D1 / R2 / DO の adapter）を持ち込まない。参照してよいのは @musubi/data-api の契約（contract.ts）だけ"
+          },
+          {
+            "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],
+            "message": "gateway は R2 を直接触らない（S3 互換 API も同じ）。data-api を Service Binding（DATA_API）で呼ぶ"
+          },
+          {
+            "group": ["@cloudflare/workers-types", "@cloudflare/workers-types/**"],
+            "message": "型は tsconfig の types で入っている。明示 import は D1Database などを別名で持ち込む抜け道になる"
+          }
+        ]
+      }
+    ],
+    // binding は型を書かなければ env から取り出せない（strict）。D1 / R2 / DO の入口になる型を gateway では書かせない。
+    // wrangler.jsonc に binding が無いこと自体は src/index.test.ts が env ごとに確かめる。
+    "typescript/no-restricted-types": [
+      "error",
+      {
+        "types": {
+          "D1Database": { "message": "gateway は D1 を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "D1DatabaseSession": { "message": "gateway は D1 を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "D1PreparedStatement": { "message": "gateway は D1 を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "R2Bucket": { "message": "gateway は R2 を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "R2MultipartUpload": { "message": "gateway は R2 を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "DurableObjectNamespace": { "message": "gateway は DO を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "DurableObjectStub": { "message": "gateway は DO を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "DurableObjectState": { "message": "gateway は DO を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "DurableObjectStorage": { "message": "gateway は DO を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" },
+          "SqlStorage": { "message": "gateway は DO を直接触らない。data-api を Service Binding（DATA_API）で呼ぶ" }
+        }
+      }
+    ]
+  }
+}

@@ -4,19 +4,20 @@
   "private": true,
   "type": "module",
   "description": "Community Gateway\u3002\u8a8d\u8a3c\u30fbAppGrant \u691c\u67fb\u306e\u5165\u53e3",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./dist/contract.js",
+  "types": "./dist/contract.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
     }
   },
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty",
     "lint": "oxlint src",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@musubi/control-plane": "workspace:*",
