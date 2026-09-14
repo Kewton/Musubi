@@ -2,8 +2,8 @@
 // 実機（workerd の Service Binding 越しの gateway → data-api）での疎通は src/worker/index.test.ts が見る。
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HOST_HEALTHZ_CHECKS } from "./contract.js";
-import { runHealthz, SKIPPED } from "./healthz.js";
-import type { GatewayHealthz } from "./healthz.js";
+import { disclose, readHealthzDetail, runHealthz, SKIPPED } from "./healthz.js";
+import type { GatewayHealthz, HealthzResult, ProbeVerifier } from "./healthz.js";
 
 const META = { env: "staging", version: "0123abc" } as const;
 
@@ -107,6 +107,27 @@ describe("runHealthz", () => {
     expect(error).toHaveBeenCalledWith("[host] healthz: gateway env mismatch (host=staging, gateway=production)");
   });
 
+  it.each([
+    [200, { ok: true }],
+    [503, { ok: false }],
+  ] as const)(
+    "gateway が詳細を隠した応答（HTTP %i）を返したら、gateway を details hidden で ng にする（host と gateway の secret が揃っていない）",
+    async (status, hidden) => {
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { status: hostStatus, body } = await runHealthz(responds(hidden, status), META);
+
+      expect(hostStatus).toBe(503);
+      expect(body.checks).toEqual({ gateway: "ng: details hidden", ...skippedAll });
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("[host] healthz: gateway hid the details"));
+    },
+  );
+
+  it("ok 以外のキーも持つ応答は、隠した応答ではなく invalid body として扱う", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { body } = await runHealthz(responds({ ok: true, service: "gateway" }), META);
+    expect(body.checks.gateway).toBe("ng: invalid body");
+  });
+
   it("gateway の応答のうち、既知の checks 以外（未知のキー・version など）は持ち出さない", async () => {
     const body = { ...GATEWAY_OK, version: "gateway-sha", checks: { ...GATEWAY_OK.checks, kv: "ng: leaked" } };
     const result = await runHealthz(responds(body), META);
@@ -114,5 +135,76 @@ describe("runHealthz", () => {
     expect(result.status).toBe(200);
     expect(result.body.checks).toEqual({ gateway: "ok", data_api: "ok", d1: "ok", r2: "ok", do: "ok" });
     expect(result.body.version).toBe("0123abc");
+  });
+});
+
+describe("readHealthzDetail（vars.HEALTHZ_DETAIL）", () => {
+  it("public と probe はそのまま読む", () => {
+    expect(readHealthzDetail("public")).toBe("public");
+    expect(readHealthzDetail("probe")).toBe("probe");
+  });
+
+  it.each([undefined, "", "Public", "true", "off"])("未設定・書き違い（%j）は probe に倒す（閉じる側）", (raw) => {
+    expect(readHealthzDetail(raw)).toBe("probe");
+  });
+});
+
+describe("disclose（詳細を誰に返すか・03 §5「セキュリティ上の注意」）", () => {
+  const TOKEN = "correct-probe-token";
+  const OK: HealthzResult = {
+    status: 200,
+    body: {
+      service: "host",
+      env: "production",
+      version: "0123abc",
+      checks: { gateway: "ok", data_api: "ok", d1: "ok", r2: "ok", do: "ok" },
+      elapsed_ms: 8.26,
+    },
+  };
+  const NG: HealthzResult = {
+    status: 503,
+    body: { ...OK.body, checks: { gateway: "ng: env mismatch", ...skippedAll } },
+  };
+
+  /** 呼ばれた値を記録する照合。adapter の代わり（時間一定の比較は src/worker/index.test.ts が workerd 上で見る） */
+  function verifier(): ProbeVerifier & { readonly calls: (string | null)[] } {
+    const calls: (string | null)[] = [];
+    return Object.assign(async (presented: string | null) => {
+      calls.push(presented);
+      return presented === TOKEN;
+    }, { calls });
+  }
+
+  it("public なら X-Musubi-Probe を見ずに詳細を返す（dev / staging の今の挙動）", async () => {
+    const verify = verifier();
+    expect(await disclose(OK, "public", null, verify)).toBe(OK.body);
+    expect(await disclose(NG, "public", "wrong", verify)).toBe(NG.body);
+    expect(verify.calls).toEqual([]);
+  });
+
+  it("probe で X-Musubi-Probe が secret と一致すれば詳細を返す", async () => {
+    const verify = verifier();
+    expect(await disclose(NG, "probe", TOKEN, verify)).toBe(NG.body);
+    expect(verify.calls).toEqual([TOKEN]);
+  });
+
+  it.each([
+    ["ヘッダ無し", null],
+    ["誤った値", "wrong-probe-token"],
+    ["空", ""],
+  ])("probe で %s なら ok だけを返し、HTTP ステータスと同じ意味にする", async (_, presented) => {
+    const verify = verifier();
+    expect(await disclose(OK, "probe", presented, verify)).toEqual({ ok: true });
+    expect(await disclose(NG, "probe", presented, verify)).toEqual({ ok: false });
+    expect(verify.calls).toEqual([presented, presented]);
+  });
+
+  it("隠した応答には service・env・version・checks・elapsed_ms・エラーの文言が1つも載らない", async () => {
+    const hidden = await disclose(NG, "probe", null, verifier());
+    expect(Object.keys(hidden)).toEqual(["ok"]);
+    const text = JSON.stringify(hidden);
+    for (const leaked of ["host", "gateway", "production", "0123abc", "env mismatch", "elapsed_ms"]) {
+      expect(text).not.toContain(leaked);
+    }
   });
 });

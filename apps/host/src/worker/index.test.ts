@@ -9,6 +9,8 @@
 //      - / と深いリンクが同じ SPAシェルを返し、/healthz が Service Binding 越しに gateway → data-api → {D1, R2, DO} まで届く
 //   4. Worker を「呼ばれたら目印を返す」罠に差し替えても、ページロードは SPAシェルが返る＝**Static Assets が Worker を起動せずに返している**。
 //      罠に掛かるのは run_worker_first の2つだけ
+//   5. production のビルドの出力では、/healthz の詳細を X-Musubi-Probe が secret と一致したときだけ返す（Issue #55）。
+//      ヘッダ無し・誤った値・正しい値の3通りと、host と gateway の secret が食い違う・secret を置いていない production を workerd 上で確かめる
 //
 // モックにしないのは gateway と同じ理由：Service Binding が結線されていること、Static Assets の経路が設定どおりであることの
 // 証明は、vite-plugin が wrangler.jsonc を解決した出力を、wrangler が実際に動かすことでしか得られない。
@@ -23,8 +25,16 @@ import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createTestHarness, unstable_readConfig } from "wrangler";
 import type { TestHarness } from "wrangler";
-import { GATEWAY_BINDING, HEALTHZ_PATH, HOST_HEALTHZ_CHECKS, PACKAGE_NAME, WORKER_ROUTES } from "./contract.js";
-import type { HostHealthzBody } from "./contract.js";
+import {
+  GATEWAY_BINDING,
+  HEALTHZ_PATH,
+  HOST_HEALTHZ_CHECKS,
+  PACKAGE_NAME,
+  PROBE_HEADER,
+  PROBE_TOKEN_SECRET,
+  WORKER_ROUTES,
+} from "./contract.js";
+import type { HealthzDetail, HostHealthzBody } from "./contract.js";
 import { SKIPPED } from "./healthz.js";
 
 const HOST_DIR = fileURLToPath(new URL("../../", import.meta.url).href);
@@ -38,6 +48,15 @@ const BOOT_TIMEOUT_MS = 120_000;
 
 const ENVS = ["dev", "staging", "production"] as const;
 type Env = (typeof ENVS)[number];
+
+/** 詳細を隠す env（03 §5「セキュリティ上の注意」）。dev / staging は今の応答のまま */
+const DETAIL: Readonly<Record<Env, HealthzDetail>> = { dev: "public", staging: "public", production: "probe" };
+
+/**
+ * テスト用の secret。実物は wrangler secret で置き、リポジトリに書かない。
+ * workerd の上では secret も vars も同じ env の文字列なので、harness の vars で渡す。
+ */
+const PROBE_TOKEN = "test-probe-token-0123456789abcdef";
 
 const readConfig = (path: string, env?: string) =>
   unstable_readConfig({ config: path, ...(env === undefined ? {} : { env }) }, { hideWarnings: true });
@@ -87,6 +106,15 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
   it("vars.ENVIRONMENT がその env を名乗る（gateway と同じ値。healthz が突き合わせる）", () => {
     expect(config.vars).toMatchObject({ ENVIRONMENT: env });
     expect(gateway.vars).toMatchObject({ ENVIRONMENT: env });
+  });
+
+  it(`vars.HEALTHZ_DETAIL が ${DETAIL[env]}（production だけ詳細を隠す。gateway と同じ値）`, () => {
+    expect(config.vars).toMatchObject({ HEALTHZ_DETAIL: DETAIL[env] });
+    expect(gateway.vars).toMatchObject({ HEALTHZ_DETAIL: DETAIL[env] });
+  });
+
+  it("MUSUBI_PROBE_TOKEN を vars に書かない（wrangler secret。リポジトリに値を置かない）", () => {
+    expect(Object.keys(config.vars)).not.toContain(PROBE_TOKEN_SECRET);
   });
 
   it("SSR をしない：main は薄い Worker（src/worker/index.ts）で、ページは Static Assets の SPAシェルが返す", () => {
@@ -169,7 +197,10 @@ describe.each(ENVS)("vite build の出力（env.%s）", (env) => {
       targetEnvironment: env,
       services: [{ binding: GATEWAY_BINDING, service: `musubi-${env}-gateway` }],
       assets: { not_found_handling: "single-page-application", run_worker_first: [...WORKER_ROUTES] },
+      // 詳細を隠すかどうかはビルドした env の vars で決まる。secret はビルドの出力にも入らない
+      vars: { ENVIRONMENT: env, HEALTHZ_DETAIL: DETAIL[env] },
     });
+    expect(Object.keys(config.vars as Record<string, unknown>)).not.toContain(PROBE_TOKEN_SECRET);
   });
 
   it("SPAシェル（dist/client/index.html）はシェルだけで、ルートの中身を描いていない（SSR にしない）", () => {
@@ -202,13 +233,16 @@ describe("生成物", () => {
 
 describe.each(ENVS)("host → gateway → data-api（env.%s・workerd 上の実機）", (env) => {
   let server: TestHarness;
+  // production は詳細を X-Musubi-Probe 付きのときだけ返す。dev / staging は secret もヘッダも無しで今の応答を返す
+  const probe = DETAIL[env] === "probe";
+  const secret = probe ? { [PROBE_TOKEN_SECRET]: PROBE_TOKEN } : {};
 
   beforeAll(async () => {
     server = createTestHarness({
       workers: [
         // 先頭が primary。server.fetch は host に届く。ビルドの出力は env を解決済みなので env を渡さない
-        { configPath: buildOf(env).workerConfigPath, vars: { GIT_SHA: "test-sha" } },
-        { configPath: GATEWAY_CONFIG_PATH, env, vars: { GIT_SHA: "test-sha" } },
+        { configPath: buildOf(env).workerConfigPath, vars: { GIT_SHA: "test-sha", ...secret } },
+        { configPath: GATEWAY_CONFIG_PATH, env, vars: { GIT_SHA: "test-sha", ...secret } },
         { configPath: DATA_API_CONFIG_PATH, env, vars: { GIT_SHA: "test-sha" } },
       ],
     });
@@ -233,7 +267,7 @@ describe.each(ENVS)("host → gateway → data-api（env.%s・workerd 上の実�
   });
 
   it("GET /healthz が Service Binding 越しに gateway に届き、data-api の D1 / R2 / DO まで全部 ok で 200", async () => {
-    const res = await server.fetch(HEALTHZ_PATH);
+    const res = await server.fetch(HEALTHZ_PATH, { headers: probe ? { [PROBE_HEADER]: PROBE_TOKEN } : {} });
     expect(res.status).toBe(200);
     const body = (await res.json()) as HostHealthzBody;
     expect(body).toEqual({
@@ -286,6 +320,139 @@ describe("別の env の gateway に届いたとき（workerd 上の実機）", 
     const body = (await res.json()) as HostHealthzBody;
     expect(body.env).toBe("dev");
     expect(body.checks).toEqual({ gateway: "ng: env mismatch", data_api: SKIPPED, d1: SKIPPED, r2: SKIPPED, do: SKIPPED });
+  });
+});
+
+/** 誤った値。長さが違う・前方一致・大文字小文字違い・空（時間一定の比較でも「一致しない」と判定されること） */
+const WRONG_PROBES = [
+  ["同じ長さの別の値", PROBE_TOKEN.replace(/f$/, "0")],
+  ["前方一致（短い）", PROBE_TOKEN.slice(0, -1)],
+  ["後ろに足した（長い）", `${PROBE_TOKEN}0`],
+  ["大文字にした", PROBE_TOKEN.toUpperCase()],
+  ["空", ""],
+] as const;
+
+/** harness の fetch が返す Response（undici の型で、workers-types の Response とは別） */
+type HarnessResponse = Awaited<ReturnType<TestHarness["fetch"]>>;
+
+/** 隠した応答：{"ok": …} だけで、構成情報（service・env・version・checks のキー・ng の文言）が本文に1つも無い */
+async function expectHidden(res: HarnessResponse, status: 200 | 503): Promise<void> {
+  expect(res.status).toBe(status);
+  const text = await res.text();
+  expect(JSON.parse(text)).toEqual({ ok: status === 200 });
+  for (const leaked of ["host", "gateway", "production", "test-sha", "data_api", "d1", "hidden", "skipped", "elapsed_ms"]) {
+    expect(text).not.toContain(leaked);
+  }
+}
+
+describe("production の /healthz は X-Musubi-Probe が正しいときだけ詳細を返す（workerd 上の実機・Issue #55 の受入試験）", () => {
+  // production のビルドの出力（HEALTHZ_DETAIL=probe）と production の gateway・data-api を並べ、secret だけテスト用の値を渡す。
+  // 正しい値で gateway まで ok になることは、host が gateway を呼ぶときに X-Musubi-Probe を載せていることの証明も兼ねる
+  // （gateway も production では詳細を隠すので、載せていなければ gateway が "ng: details hidden" になる）。
+  let server: TestHarness;
+
+  beforeAll(async () => {
+    server = createTestHarness({
+      workers: [
+        { configPath: buildOf("production").workerConfigPath, vars: { GIT_SHA: "test-sha", [PROBE_TOKEN_SECRET]: PROBE_TOKEN } },
+        { configPath: GATEWAY_CONFIG_PATH, env: "production", vars: { GIT_SHA: "test-sha", [PROBE_TOKEN_SECRET]: PROBE_TOKEN } },
+        { configPath: DATA_API_CONFIG_PATH, env: "production", vars: { GIT_SHA: "test-sha" } },
+      ],
+    });
+    await server.listen();
+  }, BOOT_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await server?.close();
+  }, BOOT_TIMEOUT_MS);
+
+  it("ヘッダ無し：{\"ok\":true} と 200 だけを返す", async () => {
+    await expectHidden(await server.fetch(HEALTHZ_PATH), 200);
+  });
+
+  it.each(WRONG_PROBES)("誤った値（%s）：{\"ok\":true} と 200 だけを返す", async (_, value) => {
+    await expectHidden(await server.fetch(HEALTHZ_PATH, { headers: { [PROBE_HEADER]: value } }), 200);
+  });
+
+  it("正しい値：host → gateway → data-api → {D1, R2, DO} の詳細を返す", async () => {
+    const res = await server.fetch(HEALTHZ_PATH, { headers: { [PROBE_HEADER]: PROBE_TOKEN } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      service: "host",
+      env: "production",
+      version: "test-sha",
+      checks: { gateway: "ok", data_api: "ok", d1: "ok", r2: "ok", do: "ok" },
+      elapsed_ms: expect.any(Number),
+    });
+  });
+
+  it("ページロードと /api/* は X-Musubi-Probe と関係なく今の応答のまま", async () => {
+    const html = readFileSync(join(buildOf("production").dist, "client/index.html"), "utf8");
+    expect(await (await server.fetch("/")).text()).toBe(html);
+    const api = await server.fetch("/api/communities", { headers: { accept: "application/json", [PROBE_HEADER]: PROBE_TOKEN } });
+    expect(api.status).toBe(404);
+    expect(await api.json()).toEqual({ error: "not found" });
+  });
+});
+
+describe("production で host と gateway の secret が食い違うとき（workerd 上の実機）", () => {
+  // host が載せた X-Musubi-Probe を gateway が受け付けず、gateway が詳細を隠す。host はそれを ng として 503 にする。
+  let server: TestHarness;
+
+  beforeAll(async () => {
+    server = createTestHarness({
+      workers: [
+        { configPath: buildOf("production").workerConfigPath, vars: { GIT_SHA: "test-sha", [PROBE_TOKEN_SECRET]: PROBE_TOKEN } },
+        { configPath: GATEWAY_CONFIG_PATH, env: "production", vars: { GIT_SHA: "test-sha", [PROBE_TOKEN_SECRET]: "another-probe-token" } },
+        { configPath: DATA_API_CONFIG_PATH, env: "production", vars: { GIT_SHA: "test-sha" } },
+      ],
+    });
+    await server.listen();
+  }, BOOT_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await server?.close();
+  }, BOOT_TIMEOUT_MS);
+
+  it("ヘッダ無し・誤った値：{\"ok\":false} と 503 だけで、ng の文言を載せない", async () => {
+    await expectHidden(await server.fetch(HEALTHZ_PATH), 503);
+    await expectHidden(await server.fetch(HEALTHZ_PATH, { headers: { [PROBE_HEADER]: "another-probe-token" } }), 503);
+  });
+
+  it("正しい値：gateway が ng: details hidden で、その先は確かめなかったと示す（HTTP ステータスは同じ 503）", async () => {
+    const res = await server.fetch(HEALTHZ_PATH, { headers: { [PROBE_HEADER]: PROBE_TOKEN } });
+    expect(res.status).toBe(503);
+    const body = (await res.json()) as HostHealthzBody;
+    expect(body.checks).toEqual({ gateway: "ng: details hidden", data_api: SKIPPED, d1: SKIPPED, r2: SKIPPED, do: SKIPPED });
+  });
+});
+
+describe("secret を置いていない production（workerd 上の実機）", () => {
+  // 閉じる側に倒す：どんな値のヘッダが付いていても詳細を返さない。gateway の詳細も読めないので ok にもならない
+  let server: TestHarness;
+
+  beforeAll(async () => {
+    server = createTestHarness({
+      workers: [
+        { configPath: buildOf("production").workerConfigPath, vars: { GIT_SHA: "test-sha" } },
+        { configPath: GATEWAY_CONFIG_PATH, env: "production", vars: { GIT_SHA: "test-sha" } },
+        { configPath: DATA_API_CONFIG_PATH, env: "production", vars: { GIT_SHA: "test-sha" } },
+      ],
+    });
+    await server.listen();
+  }, BOOT_TIMEOUT_MS);
+
+  afterAll(async () => {
+    await server?.close();
+  }, BOOT_TIMEOUT_MS);
+
+  it.each([
+    ["ヘッダ無し", undefined],
+    ["テスト用の値", PROBE_TOKEN],
+    ["空", ""],
+    ["undefined という文字列", "undefined"],
+  ] as const)("%s でも {\"ok\":false} と 503 だけを返す", async (_, value) => {
+    await expectHidden(await server.fetch(HEALTHZ_PATH, { headers: value === undefined ? {} : { [PROBE_HEADER]: value } }), 503);
   });
 });
 

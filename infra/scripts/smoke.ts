@@ -3,6 +3,7 @@
 //   pnpm smoke --env <dev|staging|production> [--expect-sha <sha>] [--base-url <url>]
 //
 // 宛先は環境変数 SMOKE_BASE_URL（host の workers.dev のオリジン）。--base-url は手元用で、あれば SMOKE_BASE_URL より優先する。
+// 環境変数 SMOKE_PROBE_TOKEN があれば X-Musubi-Probe ヘッダに載せる。**--env production では必須**（下の「production」）。
 // 全層 ok なら exit 0、それ以外は exit 1（引数の誤りも 1）。
 //
 // ── 判定（上から順に見て、最初に当たったものを `smoke: NG [<層>] …` の1行で出す）──────────
@@ -10,6 +11,7 @@
 //   [host]     届かない（接続失敗・タイムアウト）
 //   [host]     想定外の HTTP ステータス（healthz は 200 か 503 しか返さない。リダイレクトは辿らない）
 //   [host]     応答が JSON でない。HTML なら SPA シェル＝ /healthz が Worker に届いていない（assets.run_worker_first の設定漏れ）
+//   [host]     詳細が隠された応答（{"ok": …} だけ）。X-Musubi-Probe が受け付けられていない
 //   [host]     host の healthz の形でない（service・キー・値・HTTP ステータスとの整合）
 //   [host]     env が --env と一致しない／version が --expect-sha と一致しない
 //   [<check>]  checks のうち、手前の層は ok なのに ok でない層。gateway → data_api → d1 / r2 / do の順に辿る。
@@ -17,7 +19,18 @@
 //
 // 応答の形の正本は host の Worker の contract（apps/host/src/worker/contract.ts）。
 // infra/scripts は workspace の外で host に依存しないので、checks のキーはここに書き写す（host が gateway の形を写すのと同じ）。
-// 並びが食い違えば smoke.test.ts が落とす。この Issue が扱うのは詳細版の応答だけである（production で詳細を隠す経路は後続）。
+// 並びが食い違えば smoke.test.ts が落とす。
+//
+// ── production（詳細を隠す env）────────────────────────────────────────────
+//
+// production の host は、X-Musubi-Probe が secret MUSUBI_PROBE_TOKEN と一致したときだけ詳細を返し、それ以外は
+// {"ok": true|false} だけを返す（03 §5「セキュリティ上の注意」）。{"ok": true} からは env も version も層ごとの結果も読めない。
+// だから --env production では SMOKE_PROBE_TOKEN を必須にし、無ければ1回も叩かずに exit 1 にする（--expect-sha を確かめられない緑を出さない）。
+// どの env が隠すかは PROBE_REQUIRED_ENVS に書き写す（正本は host / gateway の wrangler.jsonc の vars.HEALTHZ_DETAIL。食い違えば smoke.test.ts が落とす）。
+//   - CI では **production 環境の Secret** から渡す（v* タグ・承認必須のジョブだけが読める。CLAUDE.md「資格情報の置き場所」）
+//   - 引数では受け取らない（pnpm がコマンド行をログに出す）。値は出力にもエラーにも出さない
+//   - ヘッダに載らない文字（空白・改行・非 ASCII）は叩く前に弾く。Node の fetch はその値を含む文言で落ちる
+//   - 平文の http の宛先には載せない。loopback（localhost・127.0.0.1・[::1]）だけは手元と試験のために許す
 //
 // ── 1回だけ・上限つき ──────────────────────────────────────────────────────
 //
@@ -40,6 +53,18 @@ import { parseArgs } from "node:util";
 import { ENVS, type Env } from "./sync-bindings.ts";
 
 export const HEALTHZ_PATH = "/healthz";
+
+/** 詳細版の healthz を求めるヘッダ。apps/host/src/worker/contract.ts の PROBE_HEADER と同じ。 */
+export const PROBE_HEADER = "X-Musubi-Probe";
+
+/** X-Musubi-Probe に載せる値を渡す環境変数。 */
+export const PROBE_TOKEN_ENV = "SMOKE_PROBE_TOKEN";
+
+/**
+ * X-Musubi-Probe が無いと詳細を返さない env。host / gateway の wrangler.jsonc で vars.HEALTHZ_DETAIL が public でない env と同じ。
+ * ここでは SMOKE_PROBE_TOKEN を必須にする。
+ */
+export const PROBE_REQUIRED_ENVS: readonly Env[] = ["production"];
 
 /** host の healthz が返す checks のキー。apps/host/src/worker/contract.ts の HOST_HEALTHZ_CHECKS と同じ並び。 */
 export const HOST_HEALTHZ_CHECKS = ["gateway", "data_api", "d1", "r2", "do"] as const;
@@ -100,6 +125,8 @@ export interface Expectation {
   readonly env: Env;
   /** --expect-sha。与えなければ version を照合しない */
   readonly sha: string | undefined;
+  /** X-Musubi-Probe を載せたか。詳細が隠された応答の理由を言い分けるのに使う */
+  readonly probe?: boolean;
 }
 
 export type Verdict =
@@ -161,6 +188,20 @@ export function judge(observation: Observation, expected: Expectation): Verdict 
     return ng("host", `応答が JSON でない（content-type: ${mediaType(observation.contentType)}）`, false);
   }
 
+  if (isHiddenBody(raw)) {
+    // secret の置き忘れ・値の食い違いは、待っても直らない
+    const shown = JSON.stringify({ ok: raw.ok });
+    return ng(
+      "host",
+      expected.probe === true
+        ? `詳細が隠された応答（${shown} だけ）: X-Musubi-Probe が受け付けられなかった` +
+            `（${PROBE_TOKEN_ENV} と host の secret MUSUBI_PROBE_TOKEN が一致しているかを確かめる）`
+        : `詳細が隠された応答（${shown} だけ）: この host は X-Musubi-Probe が無いと詳細を返さない` +
+            `（${PROBE_TOKEN_ENV} を渡すか、host の vars.HEALTHZ_DETAIL を確かめる）`,
+      false,
+    );
+  }
+
   const body = readBody(raw);
   if (typeof body === "string") return ng("host", `host の healthz の形でない: ${body}`, false);
 
@@ -213,6 +254,11 @@ function pathTo(layer: Layer): Layer[] {
   return layer === "host" ? ["host"] : [...pathTo(UPSTREAM[layer]), layer];
 }
 
+/** 詳細を隠した healthz の応答（{"ok": true|false} だけ）か。 */
+function isHiddenBody(raw: unknown): raw is { readonly ok: boolean } {
+  return isRecord(raw) && typeof raw.ok === "boolean" && Object.keys(raw).length === 1;
+}
+
 function isHtml(observation: { readonly contentType: string | null; readonly text: string }): boolean {
   return mediaType(observation.contentType) === "text/html" || /^\s*</.test(observation.text);
 }
@@ -250,12 +296,17 @@ function readBody(raw: unknown): HostHealthz | string {
   return raw as unknown as HostHealthz;
 }
 
-/** GET /healthz を1回行う。例外は文言を捨て、種別だけを残す。 */
-export async function observe(url: URL, fetchImpl: typeof fetch, timeoutMs: number): Promise<Observation> {
+/** GET /healthz を1回行う。例外は文言を捨て、種別だけを残す。token があれば X-Musubi-Probe に載せる。 */
+export async function observe(
+  url: URL,
+  fetchImpl: typeof fetch,
+  timeoutMs: number,
+  token?: string,
+): Promise<Observation> {
   try {
     const res = await fetchImpl(url, {
       method: "GET",
-      headers: { accept: "application/json" },
+      headers: { accept: "application/json", ...(token === undefined ? {} : { [PROBE_HEADER]: token }) },
       // 3xx は healthz の応答ではない。辿らずに判定する（Location も出さない）
       redirect: "manual",
       // 本文の読み取りまで含めて打ち切る
@@ -301,7 +352,7 @@ export function formatLayers(status: number, body: HostHealthz): string[] {
 }
 
 export interface CliIo {
-  /** 環境変数。SMOKE_BASE_URL を読む */
+  /** 環境変数。SMOKE_BASE_URL と SMOKE_PROBE_TOKEN を読む */
   env: Readonly<Record<string, string | undefined>>;
   out: (line: string) => void;
   err: (line: string) => void;
@@ -318,6 +369,8 @@ const USAGE = `usage: pnpm smoke --env <${ENVS.join("|")}> [--expect-sha <sha>] 
   --base-url <url>    host のオリジン。手元用。CI では使わない（pnpm がコマンド行をログに出す）
 
 宛先の既定は環境変数 SMOKE_BASE_URL（CI では Secret から渡す）。URL は一切表示しない。
+環境変数 ${PROBE_TOKEN_ENV} があれば ${PROBE_HEADER} ヘッダに載せる。--env ${PROBE_REQUIRED_ENVS.join(" / ")} では必須
+（その host はこれが無いと詳細を返さない。CI では production 環境の Secret から渡す）。値は一切表示しない。
 GET ${HEALTHZ_PATH} をデプロイ後に1回だけ叩く（定期ポーリングしない）。
 伝播待ちの再試行は最大 ${RETRY_POLICY.maxAttempts} 回・${seconds(RETRY_POLICY.deadlineMs)}まで。
 全層 ok なら exit ${EXIT_OK}、それ以外は exit ${EXIT_NG}。`;
@@ -385,6 +438,30 @@ export function healthzUrl(raw: string | undefined, source: string): URL {
   return new URL(HEALTHZ_PATH, base);
 }
 
+/** ループバックの宛先か。X-Musubi-Probe を http で載せてよいのはここだけ（手元の wrangler dev と試験）。 */
+const LOOPBACK_HOSTS: readonly string[] = ["localhost", "127.0.0.1", "[::1]"];
+
+/**
+ * SMOKE_PROBE_TOKEN を読む。未設定と空（GitHub Actions は無い Secret を空文字にする）は undefined。
+ * 値はエラーにも出さない。
+ */
+export function probeToken(raw: string | undefined, env: Env): string | undefined {
+  if (raw === undefined || raw === "") {
+    if (PROBE_REQUIRED_ENVS.includes(env)) {
+      throw new SmokeError(
+        `--env ${env} では環境変数 ${PROBE_TOKEN_ENV} が要る（この host は ${PROBE_HEADER} が無いと詳細を返さず、` +
+          "env も version も確かめられない。CI では production 環境の Secret から渡す）。1回も叩かずに止める",
+      );
+    }
+    return undefined;
+  }
+  // ヘッダの値として送れるのは、空白を含まない表示可能な ASCII だけにする（前後の空白は fetch が黙って削り、照合が食い違う）
+  if (!/^[\x21-\x7e]+$/.test(raw)) {
+    throw new SmokeError(`${PROBE_TOKEN_ENV} にヘッダに載せられない文字（空白・改行・非 ASCII）がある（値は表示しない）`);
+  }
+  return raw;
+}
+
 async function run(argv: readonly string[], io: CliIo): Promise<number> {
   const values = parseCliArgs(argv);
   if (values.help === true) {
@@ -398,20 +475,32 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   if (sha !== undefined && !/^[0-9a-f]{7,40}$/i.test(sha)) {
     throw new SmokeError("--expect-sha は 7〜40 桁の 16 進（commit の SHA）を渡す（値は表示しない）");
   }
+  const token = probeToken(io.env[PROBE_TOKEN_ENV], env);
   const url =
     values["base-url"] !== undefined
       ? healthzUrl(values["base-url"], "--base-url")
       : healthzUrl(io.env["SMOKE_BASE_URL"], "SMOKE_BASE_URL");
-  const expected: Expectation = { env, sha };
+  if (token !== undefined && url.protocol !== "https:" && !LOOPBACK_HOSTS.includes(url.hostname)) {
+    throw new SmokeError(
+      `${PROBE_TOKEN_ENV} を平文の http の宛先に載せない。宛先は https のオリジンにする（localhost・127.0.0.1・[::1] は除く。値は表示しない）`,
+    );
+  }
+  const expected: Expectation = { env, sha, probe: token !== undefined };
   const { policy } = io;
 
-  io.out(`smoke: GET ${HEALTHZ_PATH}（env=${env}${sha === undefined ? "" : `, expect-sha=${sha}`}）`);
+  const shown = [
+    `env=${env}`,
+    ...(sha === undefined ? [] : [`expect-sha=${sha}`]),
+    // 値は出さない。付けたことだけを出す
+    ...(token === undefined ? [] : [`${PROBE_HEADER} 付き`]),
+  ];
+  io.out(`smoke: GET ${HEALTHZ_PATH}（${shown.join(", ")}）`);
 
   const startedAt = io.now();
   for (let attempt = 1; ; attempt++) {
     const remaining = policy.deadlineMs - (io.now() - startedAt);
     const timeoutMs = Math.max(1, Math.min(policy.requestTimeoutMs, remaining));
-    const verdict = judge(await observe(url, io.fetch, timeoutMs), expected);
+    const verdict = judge(await observe(url, io.fetch, timeoutMs, token), expected);
 
     if (verdict.ok) {
       for (const line of formatLayers(verdict.status, verdict.body)) io.out(line);

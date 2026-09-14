@@ -7,11 +7,29 @@
 // gateway が ng になるのは「届かない」「healthz の応答ではない」「別の環境の gateway に届いた」の3つ。
 // gateway が 503（data_api などが ng）を返したときの gateway は ok で、ng はその先のキーに出る。
 // こうしておくと、host → gateway → data-api → {D1, R2, DO} のどこで切れたかが checks だけで読める（03 §5）。
+//
+// host はインターネットから届く。詳細を隠す env（production）では、X-Musubi-Probe が secret と一致しない限り
+// {"ok": true|false} だけを返す（disclose）。照合そのものは adapter の ProbeVerifier が行う。
+// gateway も同じ規則で隠すので、adapter は gateway を呼ぶときに secret を X-Musubi-Probe に載せる。
+// それでも gateway が隠した応答を返したら（host と gateway の secret が揃っていない）、gateway を "ng: details hidden" にする。
 import { GATEWAY_CHECKS } from "./contract";
-import type { CheckResult, GatewayCheck, HostHealthzBody, HostHealthzCheck } from "./contract";
+import type {
+  CheckResult,
+  GatewayCheck,
+  HealthzDetail,
+  HiddenHealthzBody,
+  HostHealthzBody,
+  HostHealthzCheck,
+} from "./contract";
 
 /** gateway の GET /healthz を1回呼ぶ。 */
 export type GatewayHealthz = () => Promise<Response>;
+
+/**
+ * X-Musubi-Probe の値（無ければ null）が secret MUSUBI_PROBE_TOKEN と一致するか。
+ * 時間一定の比較は Workers 固有の API を使うので adapter（src/worker/cloudflare.ts）が持つ。
+ */
+export type ProbeVerifier = (presented: string | null) => Promise<boolean>;
 
 export interface HealthzMeta {
   readonly env: string;
@@ -57,6 +75,26 @@ export async function runHealthz(
   };
 }
 
+/** vars.HEALTHZ_DETAIL を読む。"public" 以外（未設定・書き違い）は "probe" に倒す（閉じる側）。 */
+export function readHealthzDetail(raw: string | undefined): HealthzDetail {
+  return raw === "public" ? "public" : "probe";
+}
+
+/**
+ * 応答に載せる本文を決める（03 §5「セキュリティ上の注意」。apps/gateway/src/healthz.ts と同じ）。
+ * 詳細（service・env・version・checks・elapsed_ms）を返すのは、HEALTHZ_DETAIL が public のときと、
+ * X-Musubi-Probe が secret と一致したときだけ。それ以外は ok だけにする。HTTP ステータスは変えない。
+ */
+export async function disclose(
+  result: HealthzResult,
+  detail: HealthzDetail,
+  presented: string | null,
+  verify: ProbeVerifier,
+): Promise<HostHealthzBody | HiddenHealthzBody> {
+  if (detail === "public" || (await verify(presented))) return result.body;
+  return { ok: result.status === 200 };
+}
+
 async function callGateway(gateway: GatewayHealthz, env: string): Promise<Upstream> {
   // 詳細は Workers のログにだけ出す（observability.enabled。公開されない）。
   // host の応答はインターネットへ出るので、載せるのは下の固定文と例外の種別（Error#name）だけにする。
@@ -82,6 +120,11 @@ async function callGateway(gateway: GatewayHealthz, env: string): Promise<Upstre
     console.error("[host] healthz: gateway body is not JSON", e);
     return { ok: false, reason: "invalid body" };
   }
+  // gateway が詳細を隠した。host が載せた X-Musubi-Probe を gateway が受け付けていない（secret が無い・値が食い違う）。
+  if (isHiddenBody(raw)) {
+    console.error("[host] healthz: gateway hid the details (X-Musubi-Probe not accepted: MUSUBI_PROBE_TOKEN of host and gateway must be set and equal)");
+    return { ok: false, reason: "details hidden" };
+  }
   const body = readGatewayBody(raw);
   if (body === undefined) {
     console.error("[host] healthz: gateway body is not a gateway healthz body");
@@ -101,6 +144,10 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
 
 const isCheckResult = (v: unknown): v is CheckResult =>
   v === "ok" || (typeof v === "string" && v.startsWith("ng: "));
+
+/** 詳細を隠した応答（{"ok": true|false} だけ）か。 */
+const isHiddenBody = (v: unknown): v is HiddenHealthzBody =>
+  isRecord(v) && typeof v.ok === "boolean" && Object.keys(v).length === 1;
 
 /** gateway の healthz の応答として読めれば env と checks を返す。checks は既知のキーだけを持ち出す。 */
 function readGatewayBody(

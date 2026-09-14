@@ -7,12 +7,21 @@
 // data_api が ng になるのは「届かない」「healthz の応答ではない」「別の環境の data-api に届いた」の3つ。
 // data-api が 503（d1 などが ng）を返したときの data_api は ok で、ng は d1 / r2 / do の側に出る。
 // こうしておくと、どの層で切れたかが checks だけで読める（03 §5 の貫通スモーク）。
+//
+// gateway は workers.dev でインターネットから届く。詳細を隠す env（production）では、X-Musubi-Probe が
+// secret と一致しない限り {"ok": true|false} だけを返す（disclose）。照合そのものは adapter の ProbeVerifier が行う。
 import { HEALTHZ_CHECKS } from "@musubi/data-api";
 import type { CheckResult, HealthzCheck } from "@musubi/data-api";
-import type { GatewayHealthzBody, GatewayHealthzCheck } from "./contract";
+import type { GatewayHealthzBody, GatewayHealthzCheck, HealthzDetail, HiddenHealthzBody } from "./contract";
 
 /** data-api の GET /healthz を1回呼ぶ。 */
 export type DataApiHealthz = () => Promise<Response>;
+
+/**
+ * X-Musubi-Probe の値（無ければ null）が secret MUSUBI_PROBE_TOKEN と一致するか。
+ * 時間一定の比較は Workers 固有の API を使うので adapter（src/cloudflare.ts）が持つ。
+ */
+export type ProbeVerifier = (presented: string | null) => Promise<boolean>;
 
 export interface HealthzMeta {
   readonly env: string;
@@ -56,6 +65,26 @@ export async function runHealthz(
       elapsed_ms: Math.round((now() - startedAt) * 100) / 100,
     },
   };
+}
+
+/** vars.HEALTHZ_DETAIL を読む。"public" 以外（未設定・書き違い）は "probe" に倒す（閉じる側）。 */
+export function readHealthzDetail(raw: string | undefined): HealthzDetail {
+  return raw === "public" ? "public" : "probe";
+}
+
+/**
+ * 応答に載せる本文を決める（03 §5「セキュリティ上の注意」）。
+ * 詳細（service・env・version・checks・elapsed_ms）を返すのは、HEALTHZ_DETAIL が public のときと、
+ * X-Musubi-Probe が secret と一致したときだけ。それ以外は ok だけにする。HTTP ステータスは変えない。
+ */
+export async function disclose(
+  result: HealthzResult,
+  detail: HealthzDetail,
+  presented: string | null,
+  verify: ProbeVerifier,
+): Promise<GatewayHealthzBody | HiddenHealthzBody> {
+  if (detail === "public" || (await verify(presented))) return result.body;
+  return { ok: result.status === 200 };
 }
 
 async function callDataApi(dataApi: DataApiHealthz, env: string): Promise<Upstream> {
