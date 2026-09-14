@@ -175,6 +175,17 @@ apply は CI では行わず、人が立ち会う回にしか起きない。だ�
 
 手修正による乖離は PR では捕まらないが、main へのマージ直後に staging へ自動デプロイされる段で捕まり、**本番には届かない**。
 
+**実証（2026-09-14・#13）**：staging の `CONTROL_DB` の `database_id` を実在しない UUID に変えた PR（#60）を main に入れて確かめた。
+
+| 段 | 結果 |
+|---|---|
+| PR の検証ゲート（`lint-typecheck-unit`・`terraform-plan`） | **通った**（乖離チェックはゲートではない。上の設計どおり PR では捕まらない） |
+| マージ直後の deploy-staging（run 34837053508） | **⓪ の乖離チェックで失敗**。出力は `NG  packages/data-api/wrangler.jsonc: env.staging.d1_databases[CONTROL_DB].database_id` の欄のパスだけ |
+| ⓪ より後（build・D1 マイグレーション・deploy・smoke） | **すべて skipped**。staging の host の version はマージ前の `54a5ea6` のまま、全層 ok で動き続けた |
+| CI ログ（272 行） | database_id の値（実値・壊した値とも）・Account ID・workers.dev のサブドメイン・トークンは **0 件**（UUID の形 7 件はすべてランナーの一時ディレクトリ名） |
+
+値を戻す PR をマージした後の deploy-staging が成功することで、同期した状態に戻ったことを確かめる。production の CD にも同じチェックを置く（04 §5）。
+
 > **必要な資格情報は R2（tfstate の backend）の3つだけ。** `terraform output` は state を読むだけなので Cloudflare のトークンは要らない
 > （2026-09-13 実測：CF 系の環境変数0個で `init` → `infra:sync --check` まで通過、出力に Account ID なし）。
 
