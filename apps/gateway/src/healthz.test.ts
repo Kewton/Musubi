@@ -3,8 +3,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthzBody } from "@musubi/data-api";
 import { GATEWAY_HEALTHZ_CHECKS } from "./contract.js";
-import { runHealthz, SKIPPED } from "./healthz.js";
-import type { DataApiHealthz } from "./healthz.js";
+import { disclose, readHealthzDetail, runHealthz, SKIPPED } from "./healthz.js";
+import type { DataApiHealthz, HealthzResult, ProbeVerifier } from "./healthz.js";
 
 const META = { env: "staging", version: "0123abc" } as const;
 
@@ -115,5 +115,76 @@ describe("runHealthz", () => {
     expect(result.status).toBe(200);
     expect(result.body.checks).toEqual({ data_api: "ok", d1: "ok", r2: "ok", do: "ok" });
     expect(result.body.version).toBe("0123abc");
+  });
+});
+
+describe("readHealthzDetail（vars.HEALTHZ_DETAIL）", () => {
+  it("public と probe はそのまま読む", () => {
+    expect(readHealthzDetail("public")).toBe("public");
+    expect(readHealthzDetail("probe")).toBe("probe");
+  });
+
+  it.each([undefined, "", "Public", "true", "off"])("未設定・書き違い（%j）は probe に倒す（閉じる側）", (raw) => {
+    expect(readHealthzDetail(raw)).toBe("probe");
+  });
+});
+
+describe("disclose（詳細を誰に返すか・03 §5「セキュリティ上の注意」）", () => {
+  const TOKEN = "correct-probe-token";
+  const OK: HealthzResult = {
+    status: 200,
+    body: {
+      service: "gateway",
+      env: "production",
+      version: "0123abc",
+      checks: { data_api: "ok", d1: "ok", r2: "ok", do: "ok" },
+      elapsed_ms: 4.26,
+    },
+  };
+  const NG: HealthzResult = {
+    status: 503,
+    body: { ...OK.body, checks: { data_api: "ng: env mismatch", ...skippedAll } },
+  };
+
+  /** 呼ばれた値を記録する照合。adapter の代わり（時間一定の比較は src/index.test.ts が workerd 上で見る） */
+  function verifier(): ProbeVerifier & { readonly calls: (string | null)[] } {
+    const calls: (string | null)[] = [];
+    return Object.assign(async (presented: string | null) => {
+      calls.push(presented);
+      return presented === TOKEN;
+    }, { calls });
+  }
+
+  it("public なら X-Musubi-Probe を見ずに詳細を返す（dev / staging の今の挙動）", async () => {
+    const verify = verifier();
+    expect(await disclose(OK, "public", null, verify)).toBe(OK.body);
+    expect(await disclose(NG, "public", "wrong", verify)).toBe(NG.body);
+    expect(verify.calls).toEqual([]);
+  });
+
+  it("probe で X-Musubi-Probe が secret と一致すれば詳細を返す", async () => {
+    const verify = verifier();
+    expect(await disclose(NG, "probe", TOKEN, verify)).toBe(NG.body);
+    expect(verify.calls).toEqual([TOKEN]);
+  });
+
+  it.each([
+    ["ヘッダ無し", null],
+    ["誤った値", "wrong-probe-token"],
+    ["空", ""],
+  ])("probe で %s なら ok だけを返し、HTTP ステータスと同じ意味にする", async (_, presented) => {
+    const verify = verifier();
+    expect(await disclose(OK, "probe", presented, verify)).toEqual({ ok: true });
+    expect(await disclose(NG, "probe", presented, verify)).toEqual({ ok: false });
+    expect(verify.calls).toEqual([presented, presented]);
+  });
+
+  it("隠した応答には service・env・version・checks・elapsed_ms・エラーの文言が1つも載らない", async () => {
+    const hidden = await disclose(NG, "probe", null, verifier());
+    expect(Object.keys(hidden)).toEqual(["ok"]);
+    const text = JSON.stringify(hidden);
+    for (const leaked of ["gateway", "production", "0123abc", "data_api", "env mismatch", "elapsed_ms"]) {
+      expect(text).not.toContain(leaked);
+    }
   });
 });

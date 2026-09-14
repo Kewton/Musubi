@@ -273,12 +273,38 @@ gateway は `env.DATA_API.fetch()` で中継し自分の結果を足す、host �
 }
 ```
 
-**セキュリティ上の注意**：`production` の `/healthz` は**構成情報を返さない**（`{"ok":true}` のみ）。詳細版は `X-Musubi-Probe: <secret>` ヘッダ付きのときだけ返す。企画書12章の姿勢（本番資格情報・内部構成を露出させない）をヘルスチェックにも適用する。
+**セキュリティ上の注意**：`production` の `/healthz` は**構成情報を返さない**。詳細版は `X-Musubi-Probe` ヘッダに正しい値が付いたときだけ返す。
+企画書12章の姿勢（本番資格情報・内部構成を露出させない）をヘルスチェックにも適用する。2026-09-14・#55 で実装した形：
+
+| | dev / staging | production |
+|---|---|---|
+| `vars.HEALTHZ_DETAIL`（host・gateway の `wrangler.jsonc`） | `"public"` | `"probe"` |
+| ヘッダ無し・誤った値 | 上の詳細版（今のまま） | `{"ok":true}`（200）／`{"ok":false}`（503）**だけ** |
+| `X-Musubi-Probe: <MUSUBI_PROBE_TOKEN>` | 詳細版（ヘッダは見ない） | 詳細版 |
+
+- **隠すのは host と gateway の両方。** どちらも workers.dev でインターネットから届く。data-api は外部ルートを持たないので隠さない
+- 隠した応答に `service`・`env`・`version`・`checks`・`elapsed_ms` を載せない（エラーの文言も載らない）。HTTP ステータスの意味は変えない。404 / 405 はそのまま
+- 照合する値は **wrangler の secret `MUSUBI_PROBE_TOKEN`**。`wrangler.jsonc`（vars）にもリポジトリにも CI ログにも出さない。**host と gateway に同じ値を置く**
+- 比較は時間一定：両方を SHA-256 にしてから `crypto.subtle.timingSafeEqual` で比べる（長さの違いも時間に出ない）。
+  Workers 固有の API なので adapter（`apps/host/src/worker/cloudflare.ts`・`apps/gateway/src/cloudflare.ts`）に置き、詳細を返すかの判定（`disclose`）は `healthz.ts` が持つ
+- **閉じる側に倒す。** `HEALTHZ_DETAIL` が `"public"` 以外（未設定・書き違い）なら隠す。secret が無い（空も含む）production は、ヘッダが付いていても詳細を返さない
+- host は gateway を Service Binding で呼ぶとき、自分の `MUSUBI_PROBE_TOKEN` を `X-Musubi-Probe` に載せて gateway の詳細を受け取る（host の判定に要る）。
+  gateway が隠した応答を返したら `"gateway": "ng: details hidden"`（host と gateway の secret が揃っていない）。secret の無い production の host は、だから常に `{"ok":false}`（503）になる
+- ヘッダの値を応答・ログ・エラーの文言に出さない
 
 ```ts
 // infra/scripts/smoke.ts が叩く
 // pnpm smoke --env staging  →  終了コード 0/1 で CI が判定
+// SMOKE_PROBE_TOKEN=<secret> pnpm smoke --env production  →  X-Musubi-Probe を付けて詳細を取る
 ```
+
+貫通スモークは、環境変数 `SMOKE_PROBE_TOKEN` があれば `X-Musubi-Probe` に載せる。**`--env production` で無ければ、1回も叩かずに exit 1**
+（`{"ok":true}` では `--expect-sha` を確かめられない。確かめられない緑を出さない）。値は出力に出さず、平文の http の宛先（loopback 以外）には載せない。
+CI では **`production` 環境の Secret** から渡す（リポジトリ全体の Secret にしない。CLAUDE.md「資格情報の置き場所」）。
+
+> 実物の secret の登録（`wrangler secret put MUSUBI_PROBE_TOKEN --env production` を host と gateway に）と、
+> `deploy-production.yml` で `SMOKE_PROBE_TOKEN` を渡す配線は、production の CD の Issue で行う。
+> workerd 上の受入試験（ヘッダ無し・誤った値・正しい値、secret が無い production）は `apps/host/src/worker/index.test.ts`・`apps/gateway/src/index.test.ts`・`infra/scripts/smoke.test.ts` にある。
 
 ### 無償枠の実測をスモークに埋め込む（`06` §7 の #1・#2 を潰す）
 
@@ -370,7 +396,7 @@ pnpm exec wrangler d1 migrations apply CONTROL_DB --env <env> --config packages/
 - [ ] `wrangler dev` の複数Worker起動でローカルでも `/healthz` が全 ok（穴があれば `docs/runbook/local-dev.md` に明記）
 - [ ] DO の migration を `new_sqlite_classes` で切ってある
 - [ ] `docs/runbook/d1-migration.md` に前方互換規律が書かれている
-- [ ] production の `/healthz` が構成情報を漏らさない
+- [ ] production の `/healthz` が構成情報を漏らさない（実装と workerd 上の受入試験は #55。実環境での確認は production の CD の後）
 - [ ] **host が SPAシェル配信**になっており、ページロードで Worker が起動しない
 - [ ] スモークが CPU時間と `chain_total_ms` を記録し、**10ms に対する余裕が判明している**
 - [ ] `06` §7 の要確認 #1（CPU独立/合算）・#2（リクエストカウント）・#4（静的アセット無料）が実測で潰れている

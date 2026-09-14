@@ -19,6 +19,15 @@
   //   ⚠️ turbo（pnpm build / deploy:*）は CLOUDFLARE_ENV をタスクへ渡さない（turbo.json の env に無い）ので、その経路のビルドは常に dev。
   //     staging / production へ配るときは apps/host で CLOUDFLARE_ENV=<env> pnpm build してから wrangler deploy --env <env> する。
   //
+  // ── /healthz の詳細を誰に返すか（03 §5「セキュリティ上の注意」。gateway と同じ形）──────────
+  //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musubi-Probe ヘッダが
+  //                         secret MUSUBI_PROBE_TOKEN と一致したときだけ返し、それ以外は {"ok": true|false} だけにする。
+  //                         未設定・書き違いは probe として扱う（閉じる側に倒す）
+  //   MUSUBI_PROBE_TOKEN  … **wrangler secret。ここ（vars）に書かない。** `wrangler secret put MUSUBI_PROBE_TOKEN --env production`。
+  //                         gateway にも同じ値を置く。host は gateway を呼ぶときこの値を X-Musubi-Probe に載せ、gateway の詳細を受け取る。
+  //                         置いていない production は常に隠し、gateway の詳細も読めないので {"ok": false}（503）になる
+  //   この値の env ごとの形と、secret が vars に無いことは src/worker/index.test.ts が確かめる。
+  //
   // ⚠️ services / vars は env へ継承されない。だから3環境に丸ごと書く（gateway と同じ）。
   "$schema": "../../node_modules/wrangler/config-schema.json",
   "name": "musubi-dev-host",
@@ -44,18 +53,18 @@
   "env": {
     "dev": {
       "name": "musubi-dev-host",
-      "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local" },
+      "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local", "HEALTHZ_DETAIL": "public" },
       // service は gateway の wrangler.jsonc の env.<env>.name。**同じ env の gateway に結ぶ**
       "services": [{ "binding": "GATEWAY", "service": "musubi-dev-gateway" }]
     },
     "staging": {
       "name": "musubi-staging-host",
-      "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local" },
+      "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local", "HEALTHZ_DETAIL": "public" },
       "services": [{ "binding": "GATEWAY", "service": "musubi-staging-gateway" }]
     },
     "production": {
       "name": "musubi-production-host",
-      "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local" },
+      "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local", "HEALTHZ_DETAIL": "probe" },
       "services": [{ "binding": "GATEWAY", "service": "musubi-production-gateway" }]
     }
   }

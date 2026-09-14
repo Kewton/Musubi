@@ -5,10 +5,11 @@
 // 設定は src/index.test.ts が env ごとに、import と型は src/.oxlintrc.json が lint で確かめる。
 //
 // M0 で応答するのは GET /healthz だけ（03 §5 の貫通スモーク）。data-api の healthz を中継し、自分の結果を足す。
-import { cloudflareDataApi } from "./cloudflare";
+// production（vars.HEALTHZ_DETAIL が probe）では、X-Musubi-Probe が secret と一致しない限り詳細を隠す（03 §5「セキュリティ上の注意」）。
+import { cloudflareDataApi, cloudflareProbe } from "./cloudflare";
 import type { GatewayEnv } from "./cloudflare";
-import { HEALTHZ_PATH } from "./contract";
-import { runHealthz } from "./healthz";
+import { HEALTHZ_PATH, PROBE_HEADER } from "./contract";
+import { disclose, readHealthzDetail, runHealthz } from "./healthz";
 
 function json(body: unknown, status: number, headers?: Record<string, string>): Response {
   return Response.json(body, { status, ...(headers === undefined ? {} : { headers }) });
@@ -20,10 +21,16 @@ export default {
     if (url.pathname !== HEALTHZ_PATH) return json({ error: "not found" }, 404);
     if (request.method !== "GET") return json({ error: "method not allowed" }, 405, { allow: "GET" });
 
-    const { status, body } = await runHealthz(cloudflareDataApi(env), {
+    const result = await runHealthz(cloudflareDataApi(env), {
       env: env.ENVIRONMENT,
       version: env.GIT_SHA,
     });
-    return json(body, status);
+    const body = await disclose(
+      result,
+      readHealthzDetail(env.HEALTHZ_DETAIL),
+      request.headers.get(PROBE_HEADER),
+      cloudflareProbe(env),
+    );
+    return json(body, result.status);
   },
 } satisfies ExportedHandler<GatewayEnv>;

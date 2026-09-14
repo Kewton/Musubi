@@ -38,6 +38,30 @@ export type HostHealthzCheck = (typeof HOST_HEALTHZ_CHECKS)[number];
 /** 1依存の結果。失敗の詳細は "ng: <種別>" までしか載せない（packages/data-api/src/contract.ts の CheckResult と同じ）。 */
 export type CheckResult = "ok" | `ng: ${string}`;
 
+/**
+ * 詳細版の healthz を求めるヘッダ（03 §5「セキュリティ上の注意」。apps/gateway/src/contract.ts の PROBE_HEADER と同じ）。
+ * 値が secret MUSUBI_PROBE_TOKEN と一致したときだけ、HEALTHZ_DETAIL が "probe" の env でも詳細を返す。
+ * host は gateway を呼ぶときも、自分の MUSUBI_PROBE_TOKEN をこのヘッダに載せる（gateway も同じ規則で詳細を隠すため）。
+ */
+export const PROBE_HEADER = "X-Musubi-Probe" as const;
+
+/** X-Musubi-Probe と照合する wrangler secret の名前。**wrangler.jsonc に書かない**（リポジトリにも CI ログにも出さない）。 */
+export const PROBE_TOKEN_SECRET = "MUSUBI_PROBE_TOKEN" as const;
+
+/**
+ * wrangler.jsonc の vars.HEALTHZ_DETAIL が取る値（apps/gateway/src/contract.ts の HEALTHZ_DETAILS と同じ）。
+ *   public … 誰にでも詳細を返す（dev / staging）
+ *   probe  … X-Musubi-Probe が secret と一致したときだけ詳細を返す（production）。secret が無ければ常に隠す
+ * これ以外の値（未設定・書き違い）は probe として扱う（閉じる側に倒す）。
+ */
+export const HEALTHZ_DETAILS = ["public", "probe"] as const;
+export type HealthzDetail = (typeof HEALTHZ_DETAILS)[number];
+
+/** 詳細を隠した healthz の応答。HTTP ステータス（200 / 503）と同じ意味の ok だけを載せる（gateway も同じ形で隠す）。 */
+export interface HiddenHealthzBody {
+  readonly ok: boolean;
+}
+
 export interface HostHealthzBody {
   readonly service: "host";
   /** wrangler.jsonc の vars.ENVIRONMENT */
