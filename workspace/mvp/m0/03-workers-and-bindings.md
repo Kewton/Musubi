@@ -315,14 +315,12 @@ const cpu_ms = performance.now() - t0;   // ※wall clock。CPU時間の近似�
 
 ## 6. ローカル開発（企画書11章「wrangler dev で9割再現」）
 
-```bash
-# 複数Workerを同時に起動し、Service Bindings をローカルで解決させる
-pnpm exec wrangler dev -c apps/host/wrangler.jsonc \
-                       -c apps/gateway/wrangler.jsonc \
-                       -c packages/data-api/wrangler.jsonc
-```
+**確定手順は [`docs/runbook/local-dev.md`](../../../docs/runbook/local-dev.md)（2026-09-14・#11 で実測）。** ここには要点だけ残す。
 
-> **要確認**：複数 config の同時起動（マルチワーカー dev）は wrangler のバージョンによって指定方法が異なる。使用バージョンで実際に Service Binding がローカル解決されることを確認し、できなければ `wrangler dev --x-remote-bindings` 等の代替を検討して `docs/runbook/local-dev.md` に確定手順を書く。**M0のDoDに含める。**
+- host は vite でビルドする形（§2）なので、並べるのは `apps/host/wrangler.jsonc` ではなく**ビルドの出力**（`apps/host/dist/musubi_dev_host/wrangler.json`）。
+  当初ここに書いていた `-c apps/host/wrangler.jsonc` の形は、`assets.directory` が無いため起動しない
+- `--local --env dev` と `--persist-to packages/data-api/.wrangler/state` を付ける。remote binding は使わない（実環境の D1 / R2 に書き込む経路になる）
+- vite の開発サーバで gateway と data-api を補助 Worker として並べる形は、`/` の SPA シェルが返らないので採らなかった
 
 **ローカルで再現できない3つの穴**（企画書11章で確定済み・M0で明文化しておく）
 
