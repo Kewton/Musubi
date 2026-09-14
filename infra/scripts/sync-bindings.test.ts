@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { parse } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  ENVS,
   EXIT_DRIFT,
   EXIT_ERROR,
   EXIT_OK,
@@ -346,6 +347,32 @@ describe("packages/data-api/wrangler.jsonc（実物）", () => {
     for (const other of ["dev", "staging", "production"].filter((e) => e !== env)) {
       expect(parse(result.text).env[other]).toEqual(parse(text).env[other]);
     }
+  });
+});
+
+describe("apps/gateway/wrangler.jsonc（実物）", () => {
+  // gateway は Terraform 由来の binding を1つも持たない（Issue #8・CLAUDE.md 不変条件）。持つのは data-api への
+  // Service Binding だけで、それは Terraform の管理外。data-api と逆向きの穴——D1 / R2 / Queue を書き足しても
+  // 名前が表の binding と一致すれば infra:sync は黙って同期してしまう——を、実物に fixture の bindings を当てて塞ぐ。
+  const text = readFileSync(fileURLToPath(new URL("../../apps/gateway/wrangler.jsonc", import.meta.url)), "utf8");
+
+  it.each(ENVS)("env.%s があり、同期しても1文字も変わらない", (env) => {
+    expect(syncBindings({ ...STAGING, env }, text, { env })).toEqual({ text, changed: false, updated: [] });
+  });
+
+  it("Terraform 由来の binding の欄を、トップレベルにもどの env にも持たない", () => {
+    const config = parse(text);
+    for (const [where, block] of [["トップレベル", config], ...ENVS.map((env) => [`env.${env}`, config.env[env]])]) {
+      for (const key of ["d1_databases", "r2_buckets", "queues", "kv_namespaces", "dispatch_namespaces"]) {
+        expect(block, `${where}.${key}`).not.toHaveProperty(key);
+      }
+    }
+  });
+
+  it("Account ID を書いていない（public リポジトリ）：account_id の欄も、32桁の16進も無い", () => {
+    const config = parse(text);
+    for (const block of [config, ...ENVS.map((env) => config.env[env])]) expect(block).not.toHaveProperty("account_id");
+    expect(text).not.toMatch(/\b[0-9a-f]{32}\b/i);
   });
 });
 
