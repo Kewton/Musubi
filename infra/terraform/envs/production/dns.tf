@@ -9,7 +9,7 @@
 #   DMARC   … SPF / DKIM に合格しないメールは reject（サブドメインも同じ）
 #   null MX … 受信するサーバが無い（RFC 7505）
 #
-# 権限：data "cloudflare_zone" に Zone: Read、レコードに Zone: DNS: Edit（Terraform 用トークン②。README §2）。
+# 権限：data "cloudflare_zone" に Zone: Read、レコードに Zone: DNS: Edit（Terraform 用トークン②。README §2）。ゾーンの設定は zone-settings.tf。
 # TXT の値は引用符で囲んで書く（Cloudflare は囲まない TXT に警告を出し、囲んだ形で持つ）。
 
 locals {

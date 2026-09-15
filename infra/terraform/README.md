@@ -18,6 +18,7 @@ IaC二層の上側。ここに置くのは「アカウントに属し、サー�
 | **持つ** | 〃 | KV 名前空間 | `musunest-<env>-kv`（用途未定の器。namespace id は `bindings` に出していない——出し方は Issue #5 で決める） |
 | **持つ（`count = 0`）** | 〃 | WfP dispatch namespace | `musunest-<env>-apps`。`wfp_enabled` を validation で `false` に固定しているので作られない。解禁は M5〜M6（`06` §5 W-1 / W-2） |
 | **持つ** | 〃 | DNS レコード（production のゾーン `musunest.com`） | `envs/production/dns.tf`：メールのなりすまし対策（SPF・DMARC・null MX）だけ。Issue #33 |
+| **持つ** | 〃 | ゾーンの設定（同） | `envs/production/zone-settings.tf`：Always Use HTTPS・TLS 1.2 以上。HSTS は M2 で決める。Issue #33 |
 | **持つ（未実装）** | 〃 | Turnstile widget | M2（ログイン）で入れる |
 | **持たない** | `wrangler.jsonc` | Worker script 本体 | `cloudflare_workers_script` は**使わない**。デプロイは wrangler が唯一の経路 |
 | **持たない** | 〃 | bindings・routes・compatibility date・secrets 参照 | 二重管理はドリフトの温床。独自ドメイン（`app.musunest.com`）も routes の custom domain として `apps/host/wrangler.jsonc` が持ち、DNS レコードと証明書は wrangler deploy が作る |
@@ -228,7 +229,7 @@ tfstate のバケットに限ってあるため（`00` H-03）。**`--env dev` �
 | `envs/production` | ② | `production/terraform.tfstate` | **apply 済み**（Issue #4・2026-09-14。🧑 立ち会い。5 added、直後の plan は No changes） |
 
 構成は3環境とも**同一モジュール**で、差分は引数だけ（アカウント ID / `env` / `wfp_enabled`）。
-production だけ、モジュールの外にゾーン `musunest.com` の DNS レコード（`envs/production/dns.tf`）を持つ。`CLOUDFLARE_API_TOKEN` は環境ごとに切り替える
+production だけ、モジュールの外にゾーン `musunest.com` の DNS レコードと設定（`envs/production/dns.tf`・`zone-settings.tf`）を持つ。`CLOUDFLARE_API_TOKEN` は環境ごとに切り替える
 （手元では `.env` の `TF_CLOUDFLARE_API_TOKEN_PROD` を使う。**CI では production の plan を回さず**、`TF_CLOUDFLARE_API_TOKEN_PROD` は GitHub に置いていない。`04` §3）。
 
 > **アカウント②では R2 の利用契約が要る**（production の BUNDLES / UPLOADS を②に作るため。2026-09-14 に追加）。
