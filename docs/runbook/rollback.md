@@ -212,8 +212,7 @@ terraform -chdir=infra/terraform/envs/<env> apply tfplan
 
 ## 4. 実演の記録（M0 の DoD）
 
-> **状態：未実施。** Issue #17 の DoD「実際に production を1つ前のバージョンへ戻して復帰させた記録がある」は、この節が埋まるまで満たされない。
-> `rollback.yml` を含む v タグが要るので、**この runbook を入れた PR が main に入った後**に、🧑 所有者の立ち会いで行う。
+> **状態：2026-09-15 実施済み（🧑 所有者の立ち会い）。** Issue #17 の DoD「実際に production を1つ前のバージョンへ戻して復帰させた記録がある」を満たした（§4.2）。
 
 ### 4.1 手順
 
@@ -235,15 +234,20 @@ terraform -chdir=infra/terraform/envs/<env> apply tfplan
 
 | 段 | 日時（JST） | ワークフローの run | 結果 | 切り替え（deploy-worker の OK 行） | smoke の version |
 |---|---|---|---|---|---|
-| 2. v0.1.1 を配る | | | | — | |
-| 3. v0.1.0 へ戻す | | | | ___ 秒 | `e615787…` |
-| 4. v0.1.1 へ戻す | | | | ___ 秒 | |
+| 2. v0.1.1 を配る | 2026-09-15 09:32（起動）→ 09:34 完了 | deploy-production 34913580563 | success（🧑 承認） | — | `6b2a6ba…` |
+| 3. v0.1.0 へ戻す | 09:38（起動）→ 承認後 09:38:50〜09:39:37 | rollback 34914001211 | success（🧑 承認） | **9 秒** | `e615787…` |
+| 4. v0.1.1 へ戻す | 09:41（起動）→ 承認後 09:41:37〜09:42:22 | rollback 34914211412 | success（🧑 承認） | **9 秒** | `6b2a6ba…` |
 
-- [ ] 3 の順が host → gateway → data-api、4 の順が data-api → gateway → host
-- [ ] 3 の smoke が v0.1.0 の commit で green（古い版が動いている）、4 の smoke が v0.1.1 の commit で green
-- [ ] どちらのジョブにも build・D1 マイグレーション・乖離チェックの段が無い
-- [ ] ログに workers.dev のホスト名・Account ID・メールアドレス・合言葉が出ていない
-- [ ] 承認してから smoke green までの時間（ジョブの所要）を 05 のロールバック所要時間（C-8）に記録した
+- [x] 3 の順が host → gateway → data-api、4 の順が data-api → gateway → host（どちらも各 Worker の今のデプロイが目的の版を 100% で向いていることを確かめた）
+- [x] 3 の smoke が v0.1.0 の commit で green（古い版が動いている）、4 の smoke が v0.1.1 の commit で green。監督側が外から production の `/healthz` を読んでも同じ version・全層 ok、合言葉なしは `{"ok":true}` だけ
+- [x] どちらのジョブにも build・D1 マイグレーション・乖離チェックの段が無い
+- [x] ログに workers.dev のホスト名・Account ID・メールアドレス・合言葉が出ていない（3 は 356 行・4 は 354 行を監督側が照合して 0 件）
+- [x] 承認してから smoke green までの時間（ジョブの所要）を 05 のロールバック所要時間（C-8）に記録した：**3 は 47 秒・4 は 45 秒**
+
+> ⚠️ **実演で踏んだ落とし穴：前の実行が終わる前に次を起動しない。** rollback.yml と deploy-production.yml は同じ concurrency の group にあり、
+> GitHub は group の中で**待っている実行を1つしか持たない**（新しい実行が来ると、待っていた古い実行を取り消す）。1回目は、v0.1.1 の配備が
+> まだ動いている間に「3. 戻す」を起動し、その2秒後に「4. 進める」を起動したため、待っていた 3（run 34913674574）が取り消され、4（run 34913703646）
+> だけが残った（4 は今と同じ版への切り替えなので、監督側が承認前に取り消した）。**1つの実行が完了してから次を起動する。**
 
 ### 4.3 PR の段階で確かめたこと（production に触れていない）
 
