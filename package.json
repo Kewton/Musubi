@@ -15,6 +15,7 @@
     "check:tf-validate": "bash .commandmate/scripts/check-terraform.sh validate",
     "check": "pnpm check:verify-parity && pnpm lint && pnpm typecheck && pnpm test && pnpm check:tf-fmt && pnpm check:tf-validate",
     "infra:sync": "tsx infra/scripts/sync-bindings.ts",
+    "infra:empty-buckets": "tsx infra/scripts/empty-buckets.ts",
     "deploy:dev": "turbo run deploy --filter=./apps/* --filter=./packages/data-api -- --env dev",
     "deploy:staging": "CLOUDFLARE_ENV=staging turbo run deploy --filter=./apps/* --filter=./packages/data-api -- --env staging",
     "deploy:production": "CLOUDFLARE_ENV=production turbo run deploy --filter=./apps/* --filter=./packages/data-api -- --env production",

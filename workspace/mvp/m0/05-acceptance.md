@@ -13,41 +13,49 @@
 ### 前提として除外するもの
 - 🧑 H-01（Cloudflareアカウント）／H-02（APIトークン）／H-03（tfstate用R2バケット）
   → これらは**IaCで作れない土台**（鶏卵問題）。試験の前提条件であり「手作業」には数えない。**この除外は明示的に宣言する。**
+- 手元の道具：tfenv（`.terraform-version`）・`pnpm install` 済み・worktree なら `./infra/scripts/link-env.sh` 済み（`.env` は追跡していない。CLAUDE.md）。
+  これも試験の前の準備で、①〜⑤の時間にも手作業にも数えない
 
-### 手順（ストップウォッチを回して実行）
+### 手順（ストップウォッチはスクリプトが回す）
+
+**①〜⑤を1本で流す**（Issue #67）。段ごとの所要時間と合計を出し、どこかの段が落ちたらそこで止まる。確認のプロンプトは出ない。
 
 ```bash
-cd infra/terraform/envs/dev
-export CLOUDFLARE_API_TOKEN="$TF_CLOUDFLARE_API_TOKEN"
-export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-
-# ① 消す（R2にオブジェクトが残っていると失敗する → pre-hookで空にする）
-pnpm infra:empty-buckets --env dev
-terraform destroy -auto-approve
-
-# ② 作り直す
-terraform apply -auto-approve
-
-# ③ 新しいIDを wrangler.jsonc に同期
-cd ../../../..
-pnpm infra:sync --env dev
-
-# ④ 配る
-pnpm deploy:dev
-
-# ⑤ 貫通スモーク
-pnpm smoke --env dev
+./infra/scripts/reproduce-dev.sh    # リポジトリ直下の .env を読む（別のファイルは --env-file <file>）
 ```
+
+スクリプトがしていること。手で分けて流すときも、この順・この資格情報で流す（`infra/scripts/reproduce-dev.sh` 冒頭）。
+
+| 段 | コマンド（リポジトリ直下から） | 渡す資格情報 |
+|---|---|---|
+| ① 空にする | `pnpm infra:empty-buckets --env dev`（BUNDLES・UPLOADS のオブジェクトを全部消す。**dev 以外は受け付けない**） | `TF_CLOUDFLARE_API_TOKEN` を `CLOUDFLARE_API_TOKEN` として・`CLOUDFLARE_ACCOUNT_ID` |
+| ① 消す | `terraform -chdir=infra/terraform/envs/dev init -input=false -lockfile=readonly` → `destroy -auto-approve` | `TF_CLOUDFLARE_API_TOKEN` を `CLOUDFLARE_API_TOKEN` として・`CLOUDFLARE_ACCOUNT_ID` を `TF_VAR_account_id` として・backend の R2 の3つ（`AWS_*` として） |
+| ② 作り直す | `apply -auto-approve` → `plan -detailed-exitcode` が exit 0 | 同上 |
+| ③ 同期 | `pnpm infra:sync --env dev` → `pnpm infra:sync --env dev --check` が exit 0 | backend の R2 の3つだけ |
+| ④ build | `CLOUDFLARE_ENV=dev pnpm build`（host は build の時点で env が決まる。`04` §4） | なし |
+| ④ 配る | `pnpm exec tsx infra/scripts/deploy-worker.ts --env dev` の `--target migrate` → `data-api` → `gateway` → `host`（`--sha` は HEAD） | `CLOUDFLARE_API_TOKEN`（CI 用）・`CLOUDFLARE_ACCOUNT_ID` |
+| ⑤ 貫通スモーク | `pnpm exec tsx infra/scripts/deploy-worker.ts --env dev --smoke --sha <HEAD>` | 同上 |
+
+- **production の資格情報（`*_PROD`・`MUSUBI_PROBE_TOKEN`・`SMOKE_*`）はどの段にも渡さない。** `CLOUDFLARE_ACCOUNT_ID` が `CLOUDFLARE_ACCOUNT_ID_PROD` と同じなら、何もせずに止まる
+- ⑤ の宛先（dev の host の workers.dev のオリジン）は、Cloudflare の API で読んだサブドメインと host の Worker 名から組み立て、**表示せずに** smoke の判定へ渡す（`deploy-worker.ts` 冒頭「dev の貫通スモーク」）。dev には CD も Secret も無いので、`SMOKE_BASE_URL` をどこにも置かない
+- 出力は公開の場に貼ってよい形にしてある：workers.dev のホスト名・Account ID の形・terraform の `[id=…]` を伏せ、terraform と build は要約の行だけを出す。全文はログのファイル（一時ディレクトリ）に残る。**ログのファイルは貼らない**
+- 消す前に件数だけを見るなら `pnpm infra:empty-buckets --env dev --dry-run`（読み取りだけ）
+
+> **前の版の手順（`pnpm deploy:dev` と `pnpm smoke --env dev`）は、そのままでは通らない形だった**（一度も流していない）。`infra:empty-buckets` が無く、
+> `deploy:dev` は D1 マイグレーションを当てず（D1 は作り直されて空になる）、`GIT_SHA` を渡さず、workers.dev のホスト名をそのまま出す。
+> `smoke --env dev` には宛先（`SMOKE_BASE_URL`）が無い。
+
+**終わった後**：③ で `packages/data-api/wrangler.jsonc` の `database_id` が変わる（スクリプトが書き換えたファイルを挙げる）。
+`infra/terraform/README.md` §2 のとおりコミットする。これは再現の後始末で、手で編集したファイルには数えない。
 
 ### 判定
 
 | 項目 | 事前宣言（README §5） | 実測 | 判定 |
 |---|---|---|---|
-| 所要時間（①〜⑤） | ≤ 15分 | ___ 分 | ☐ |
+| 所要時間（①〜⑤） | ≤ 15分 | ___ 分（スクリプトの「合計（①〜⑤）」） | ☐ |
 | ダッシュボード操作回数 | **0回** | ___ 回 | ☐ |
-| 手で編集したファイル数 | **0件** | ___ 件 | ☐ |
-| `smoke` の全チェック | 全 `ok` | ___ | ☐ |
+| 手で編集したファイル数 | **0件** | ___ 件（`infra:sync` が書き換えた `wrangler.jsonc` は数えない） | ☐ |
+| `smoke` の全チェック | 全 `ok` | ___（⑤ の `smoke: OK` の行） | ☐ |
 
 > **1回でも手作業が混ざったら未達。** 「今回だけダッシュボードで直した」を許すと、この試験は意味を失う。混ざったらその手作業をIssueにしてスクリプト化する。
 
