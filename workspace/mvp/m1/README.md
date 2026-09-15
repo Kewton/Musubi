@@ -7,8 +7,8 @@
 >
 > ⚠️ **進め方を見直した（2026-09-15）**：所有者の方針「まず手書きのサンプルアプリを Cloudflare で動かし、その後に CommandAgent を合わせて結合する」を受けて、
 > 進め方を [`01-integration-strategy.md`](./01-integration-strategy.md) にまとめ、所有者が決めた（同 §6）。**M1 は M1a（見本 3 つをこのリポジトリで動かす）と M1b（CommandAgent と結合する）に分ける。**
-> 見本 3 つ（割り勘・タスク管理・ダッシュボード）の宣言の具体例は [`02-l2-spec-examples.md`](./02-l2-spec-examples.md) にある。
-> **§0 の表と §1 以降は、まだ「工場の golden を先に動かす」前提のままである。** D1（サンプルの形）と M1a・M1b のゲートの宣言が済んだら、`00-open-questions.md` とあわせて書き直す。
+> 見本 3 つ（割り勘・タスク管理・ダッシュボード）の宣言の具体例は [`02-l2-spec-examples.md`](./02-l2-spec-examples.md)、宣言の層構造と静的チェックの方向性は [`03-spec-layers-and-checker.md`](./03-spec-layers-and-checker.md) にある。
+> **M1a と M1b のゲートは 2026-09-15 に宣言し直した（`01` §5.3）。§0 の表と §1 以降は、まだ「工場の golden を先に動かす」前提のままである。** 次に `00-open-questions.md` とあわせて M1a 向けに書き直す。
 
 ---
 
@@ -103,6 +103,8 @@ M1 で頻出する専門用語の意味を以下にまとめる。
 | M1-2 | CommandAgent 連携 Lv1 | ① headless 契約で工場の結果を読み取れる。<br>② ピン差し替えの儀式を 1 回行う。<br>③ one-shot 生成 → R2 → スマホ確認までを一気通貫で通す。<br>④ 納品物の決定的な再検証をプラットフォーム側から再現する。 |
 
 ### 1.2 ゲート（2026-09-15 事前宣言済み・`../m0/05-acceptance.md` §7）
+
+> ⚠️ **この宣言は、同じ日に M1a と M1b に分けて宣言し直した**（[`01-integration-strategy.md`](./01-integration-strategy.md) §5.3）。下は元の宣言で、M1b のゲートに含まれる。
 
 この節で言いたいこと：
 合否判定は「封緘済み golden 割り勘が staging のスマホで動く」ことである。判定者は Kewton、期限は M1 着手から 2 週間（着手日は未定）である。
