@@ -48,7 +48,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musunest-dev-control",
-          "database_id": "abff398f-086b-4aa1-86c4-3ff571dd77a0",
+          "database_id": "b573e00e-98af-498a-873e-ad5373767179",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
@@ -65,7 +65,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musunest-staging-control",
-          "database_id": "792a1ec4-1ce4-44a0-9876-fe73d9e113fe",
+          "database_id": "7056fdd8-a9c3-4613-bd71-d3080f9886a7",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
@@ -82,7 +82,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musunest-production-control",
-          "database_id": "d399849e-6c20-4f23-98f0-88e05fc502af",
+          "database_id": "f27e63ef-17e6-4bf4-931d-b8e902be5dca",
           "migrations_dir": "../control-plane/migrations"
         }
       ],

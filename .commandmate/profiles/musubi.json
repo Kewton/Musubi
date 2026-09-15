@@ -1,6 +1,6 @@
 {
   "id": "musubi",
-  "repository": "Kewton/Musubi",
+  "repository": "Kewton/Musunest",
   "base": "origin/main",
   "branch_template": "feat/{number}-{slug}",
   "worktree_template": "../{repo}-issue-{number}",
