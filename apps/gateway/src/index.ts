@@ -7,6 +7,9 @@
 // M0 で応答するのは GET /healthz だけ（03 §5 の貫通スモーク）。data-api の healthz を中継し、自分の結果を足す。
 // production（vars.HEALTHZ_DETAIL が probe）では、X-Musubi-Probe が secret と一致しない限り詳細を隠す（03 §5「セキュリティ上の注意」）。
 import { cloudflareDataApi, cloudflareProbe } from "./cloudflare";
+// 否定試験（#18 試験B）：gateway から app-do を直接 import する。lint が落ちることを確かめたら PR を閉じる
+import { AppInstanceDO } from "@musubi/app-do";
+export { AppInstanceDO as _NegativeTestBoundary };
 import type { GatewayEnv } from "./cloudflare";
 import { HEALTHZ_PATH, PROBE_HEADER } from "./contract";
 import { disclose, readHealthzDetail, runHealthz } from "./healthz";
