@@ -96,8 +96,8 @@ pnpm smoke --env staging
 | C-5 | squash merge | staging へ自動デプロイ → smoke green | ☐ |
 | C-6 | `v0.0.1` タグ push | 🧑 **承認依頼が届く** | ☐ |
 | C-7 | 承認 | production へデプロイ → smoke green | ☐ |
-| C-8 | `wrangler rollback`（または rollback.yml） | production が1つ前へ戻り smoke green | ☐ |
-| C-9 | 再デプロイで復帰 | production が最新へ戻る | ☐ |
+| C-8 | `wrangler rollback`（または rollback.yml） | production が1つ前へ戻り smoke green | ✅ 2026-09-15：rollback.yml で v0.1.1 → v0.1.0（run 34914001211・切り替え 9 秒・smoke green。`docs/runbook/rollback.md` §4.2） |
+| C-9 | 再デプロイで復帰 | production が最新へ戻る | ✅ 2026-09-15：rollback.yml で v0.1.0 → v0.1.1 に戻した（run 34914211412・切り替え 9 秒・smoke green）。一次手段で復帰し、タグの再デプロイは不要だった |
 
 **計測**
 
@@ -105,7 +105,7 @@ pnpm smoke --env staging
 |---|---|---|---|
 | PR検査時間 | ≤ 5分 | ___ | ☐ |
 | main merge → staging smoke green | ≤ 10分 | ___ | ☐ |
-| ロールバック所要時間（C-8） | 宣言なし → **ここで初期値を記録** | ___ | 記録 |
+| ロールバック所要時間（C-8） | 宣言なし → **ここで初期値を記録** | **承認から smoke green まで 47 秒**（うち切り替え 9 秒）。復帰は 45 秒 | 記録 |
 
 ---
 
