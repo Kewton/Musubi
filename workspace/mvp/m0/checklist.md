@@ -31,7 +31,7 @@
 
 ## 先行取得（M0のブロッカーではないが、M0期間中に済ませる）
 
-- [ ] 🧑 H-10 LINE Developers アカウント＋dev用 Login チャネル
+- [ ] ⏸ 🧑 H-10 LINE Developers アカウント＋dev用 Login チャネル（2026-09-15 保留。ログインは当面 Google OAuth のみ）
 - [ ] 🧑 H-11 Google Cloud プロジェクト＋OAuth同意画面・devクライアント
 - [ ] 🧑 H-12 CommandAgent 接点・ピン対象（schema版・テンプレSHA・headless契約版）の確定
 - [ ] 🧑 ~~H-09 WfP有効化~~ → **M5〜M6へ延期。M0では「要らないこと」を確定させるだけ**

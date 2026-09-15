@@ -16,7 +16,7 @@
 | 初めて起動する | §1 を上から |
 | コードを変えた | wrangler dev を Ctrl+C で止めて §1.2 から |
 | ローカルのデータを消す | §2.3 |
-| WfP dispatch・LINE Login・外部送信を試す | ローカルではできない（§4） |
+| WfP dispatch・Google OAuth・外部送信を試す | ローカルではできない（§4） |
 
 コマンドはすべて**リポジトリ直下**で打つ。
 
@@ -163,7 +163,7 @@ rm -rf packages/data-api/.wrangler/state
 | 穴 | ローカルで何が起きるか | M0 での扱い | 代わりに何で確かめるか |
 |---|---|---|---|
 | **WfP dispatch** | wrangler 4.131.1 は dispatch namespace の binding を `not supported` と表示し、呼ぶと `Binding DISPATCHER needs to be run remotely` で失敗する（2026-09-14 実測。一時的な設定で試した）。つなぐには remote binding が要り、§3 に反する | **使わない。** `wfp_enabled` を validation で `false` に固定してあり（`infra/terraform/modules/musubi-env/variables.tf`）、どの wrangler.jsonc にも `dispatch_namespaces` が無い。Free 前提（CLAUDE.md） | 解禁（`06` §5 の W-1 / W-2。M5〜M6）の後に **staging** で確かめる（`03` §6） |
-| **LINE Login** | LINE のサーバーとの往復（認可画面・コールバック）が要り、手元の workerd の中では閉じない | **対象が無い。** 認証は M2 で入る（gateway の中身は M2。`03` §1） | M2 で、dev 用の LINE Login チャネル（`00-human-tasks.md` H-10・#22）で実物と往復する。それ以外は mock（`03` §6） |
+| **Google OAuth** | Google のサーバーとの往復（認可画面・コールバック）が要り、手元の workerd の中では閉じない | **対象が無い。** 認証は M2 で入る（gateway の中身は M2。`03` §1）。**ログインは当面 Google OAuth のみ**で、LINE Login は軌道に乗り要望が出てから（2026-09-15 決定） | M2 で、dev 用の OAuth クライアント（`00-human-tasks.md` H-11・#23）で実物と往復する。それ以外は mock（`03` §6） |
 | **外部送信** | 送った結果は外部サービスに届いて初めて分かる。手元から送れば実物に届き、取り消せない | **対象が無い。** 外へ送るコードは M0 に無い（`packages/connector` は空） | 送る処理を足すときは、宛先に届かない **dry-run** を一級市民として先に用意し、ローカルと自動テストはそれで動かす（`03` §6）。dry-run のインターフェースはまだ無い（この runbook の対象外） |
 
 ---
