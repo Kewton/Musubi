@@ -41,16 +41,16 @@ importers:
 
   apps/gateway:
     dependencies:
-      '@musubi/control-plane':
+      '@musunest/control-plane':
         specifier: workspace:*
         version: link:../../packages/control-plane
-      '@musubi/data-api':
+      '@musunest/data-api':
         specifier: workspace:*
         version: link:../../packages/data-api
 
   apps/host:
     dependencies:
-      '@musubi/sdk':
+      '@musunest/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
       '@tanstack/react-router':
@@ -86,7 +86,7 @@ importers:
 
   packages/app-do:
     dependencies:
-      '@musubi/appspec-schema':
+      '@musunest/appspec-schema':
         specifier: workspace:*
         version: link:../appspec-schema
 
@@ -94,40 +94,40 @@ importers:
 
   packages/connector:
     dependencies:
-      '@musubi/appspec-schema':
+      '@musunest/appspec-schema':
         specifier: workspace:*
         version: link:../appspec-schema
 
   packages/control-plane:
     dependencies:
-      '@musubi/appspec-schema':
+      '@musunest/appspec-schema':
         specifier: workspace:*
         version: link:../appspec-schema
 
   packages/data-api:
     dependencies:
-      '@musubi/app-do':
+      '@musunest/app-do':
         specifier: workspace:*
         version: link:../app-do
-      '@musubi/appspec-schema':
+      '@musunest/appspec-schema':
         specifier: workspace:*
         version: link:../appspec-schema
-      '@musubi/sdk':
+      '@musunest/sdk':
         specifier: workspace:*
         version: link:../sdk
-      '@musubi/spec-engine':
+      '@musunest/spec-engine':
         specifier: workspace:*
         version: link:../spec-engine
 
   packages/sdk:
     dependencies:
-      '@musubi/appspec-schema':
+      '@musunest/appspec-schema':
         specifier: workspace:*
         version: link:../appspec-schema
 
   packages/spec-engine:
     dependencies:
-      '@musubi/appspec-schema':
+      '@musunest/appspec-schema':
         specifier: workspace:*
         version: link:../appspec-schema
 

@@ -36,13 +36,13 @@
 //   - ANSI エスケープは伏せる前に取り除く。色の切り替えがホスト名の途中に入ると一致しなくなり、OSC 8 のリンクは URL を運ぶ
 // 行頭（空白の後を含む）の `::` は崩す。GitHub Actions のワークフローコマンドとして解釈させない。
 //
-// ── Worker の secret（production の host と gateway の MUSUBI_PROBE_TOKEN）──────────────────────
+// ── Worker の secret（production の host と gateway の MUSUNEST_PROBE_TOKEN）──────────────────────
 //
-// production の host と gateway は、X-Musubi-Probe が secret MUSUBI_PROBE_TOKEN と一致したときだけ /healthz の詳細を返す
+// production の host と gateway は、X-Musunest-Probe が secret MUSUNEST_PROBE_TOKEN と一致したときだけ /healthz の詳細を返す
 // （03 §5「セキュリティ上の注意」）。secret の無い production の host は常に {"ok": false}（503）になり、貫通スモークが通らない。
 // だから **詳細を隠す env（smoke.ts の PROBE_REQUIRED_ENVS）の gateway と host を配るときは、毎回 secret を一緒に載せる**
 // （2026-09-14・Issue #16 の決定。手で wrangler secret put をしない）。
-//   - 値は同じ名前の環境変数から読む。CI では **production 環境の Secret** MUSUBI_PROBE_TOKEN を、そのステップの env にだけ渡す
+//   - 値は同じ名前の環境変数から読む。CI では **production 環境の Secret** MUSUNEST_PROBE_TOKEN を、そのステップの env にだけ渡す
 //   - 無ければ wrangler を起動せずに exit 1（secret の無い production を配らない）。ヘッダに載らない文字（smoke.ts と同じ規則）と、
 //     短すぎる値（PROBE_TOKEN_MIN_LENGTH 未満）も弾く。値はエラーにも出さない
 //   - 値は一時ディレクトリ（0700）の中のファイル（0600）に JSON で書き、wrangler deploy --secrets-file に渡し、
@@ -108,13 +108,13 @@ export const WORKER_DIRS: Readonly<Record<WorkerTarget, string>> = {
 export const MIGRATION_CONFIG = "packages/data-api/wrangler.jsonc";
 export const MIGRATION_DATABASE = "CONTROL_DB";
 
-/** X-Musubi-Probe と照合する Worker の secret。apps/host/src/worker/contract.ts・apps/gateway/src/contract.ts の PROBE_TOKEN_SECRET と同じ。 */
-export const PROBE_TOKEN_SECRET = "MUSUBI_PROBE_TOKEN";
+/** X-Musunest-Probe と照合する Worker の secret。apps/host/src/worker/contract.ts・apps/gateway/src/contract.ts の PROBE_TOKEN_SECRET と同じ。 */
+export const PROBE_TOKEN_SECRET = "MUSUNEST_PROBE_TOKEN";
 
 /** /healthz の詳細を隠す Worker（wrangler.jsonc に vars.HEALTHZ_DETAIL を持つもの）。詳細を隠す env ではこれらに secret を載せる。 */
 export const PROBE_TARGETS: readonly WorkerTarget[] = ["gateway", "host"];
 
-/** MUSUBI_PROBE_TOKEN の長さの下限。短い値は総当たりで当たる（例：`openssl rand -hex 32` は 64 文字） */
+/** MUSUNEST_PROBE_TOKEN の長さの下限。短い値は総当たりで当たる（例：`openssl rand -hex 32` は 64 文字） */
 export const PROBE_TOKEN_MIN_LENGTH = 32;
 
 export const EXIT_OK = 0;
@@ -177,7 +177,7 @@ export function readSecrets(names: readonly string[], env: Readonly<Record<strin
           "CI では production 環境の Secret から渡す）。wrangler を起動せずに止める",
       );
     }
-    // X-Musubi-Probe に載せる値。smoke.ts の SMOKE_PROBE_TOKEN と同じく、空白を含まない表示可能な ASCII だけ
+    // X-Musunest-Probe に載せる値。smoke.ts の SMOKE_PROBE_TOKEN と同じく、空白を含まない表示可能な ASCII だけ
     if (!/^[\x21-\x7e]+$/.test(value)) {
       throw new DeployError(`${name} にヘッダに載せられない文字（空白・改行・非 ASCII）がある（値は表示しない）`);
     }
@@ -571,7 +571,7 @@ export interface CliIo {
   root: string;
   /**
    * 子プロセスへ渡す環境変数。CLOUDFLARE_ACCOUNT_ID（伏せる値）、RUNNER_TEMP（--log-dir と secret の一時ファイルの置き場の既定）、
-   * 載せる Worker の secret（MUSUBI_PROBE_TOKEN。子プロセスには渡さない）もここから読む
+   * 載せる Worker の secret（MUSUNEST_PROBE_TOKEN。子プロセスには渡さない）もここから読む
    */
   env: Readonly<Record<string, string | undefined>>;
   out: (line: string) => void;

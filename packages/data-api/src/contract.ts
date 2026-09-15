@@ -5,7 +5,7 @@
 // Worker 本体や app-do（cloudflare:workers）を巻き込まないようにするため。
 // Worker の入口は wrangler.jsonc の main（src/index.ts）で、こちらとは別にしてある。
 
-export const PACKAGE_NAME = "@musubi/data-api" as const;
+export const PACKAGE_NAME = "@musunest/data-api" as const;
 
 /** 貫通スモーク（03 §5）が叩くパス。data-api が応答するのはこれだけ。 */
 export const HEALTHZ_PATH = "/healthz" as const;

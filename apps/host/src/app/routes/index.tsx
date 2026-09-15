@@ -4,5 +4,5 @@ import { createFileRoute } from "@tanstack/react-router";
 export const Route = createFileRoute("/")({ component: Home });
 
 function Home() {
-  return <h1>Musubi</h1>;
+  return <h1>MUSUNEST</h1>;
 }

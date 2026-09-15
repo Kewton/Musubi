@@ -22,7 +22,7 @@ variable "env" {
 variable "name_prefix" {
   description = "全リソース名の先頭。`<name_prefix>-<env>-<用途>` になる。"
   type        = string
-  default     = "musubi"
+  default     = "musunest"
 
   validation {
     # R2 bucket 名の制約（小文字英数とハイフン・先頭末尾は英数・63文字以内）に合わせる。

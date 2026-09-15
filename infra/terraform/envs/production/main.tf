@@ -1,7 +1,7 @@
 # 環境側は薄い。差分は引数だけで、資源の定義はモジュールが持つ（02 §5 / §9）。
 # apply は Issue #4（🧑 承認必須）。production では terraform destroy を実行しない（02 §8）。
 module "env" {
-  source = "../../modules/musubi-env"
+  source = "../../modules/musunest-env"
 
   account_id = var.account_id_prod
   env        = "production"

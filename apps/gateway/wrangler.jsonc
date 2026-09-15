@@ -12,18 +12,18 @@
   //   この契約は infra/scripts/sync-bindings.test.ts が、DO を含む binding の不在と services の宛先は src/index.test.ts が確かめる。
   //
   // ── /healthz の詳細を誰に返すか（03 §5「セキュリティ上の注意」）────────────────
-  //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musubi-Probe ヘッダが
-  //                         secret MUSUBI_PROBE_TOKEN と一致したときだけ返し、それ以外は {"ok": true|false} だけにする。
+  //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musunest-Probe ヘッダが
+  //                         secret MUSUNEST_PROBE_TOKEN と一致したときだけ返し、それ以外は {"ok": true|false} だけにする。
   //                         未設定・書き違いは probe として扱う（閉じる側に倒す）
-  //   MUSUBI_PROBE_TOKEN  … **Worker の secret。ここ（vars）に書かない。** 値の正本は GitHub の production 環境の Secret MUSUBI_PROBE_TOKEN で、
+  //   MUSUNEST_PROBE_TOKEN  … **Worker の secret。ここ（vars）に書かない。** 値の正本は GitHub の production 環境の Secret MUSUNEST_PROBE_TOKEN で、
   //                         CD（deploy-production.yml。04 §5）が deploy のたびに `wrangler deploy --secrets-file` で gateway と host に同じ値を載せる
   //                         （infra/scripts/deploy-worker.ts。値が無ければ配らない）。**手で wrangler secret put をしない**（次の deploy で上書きされる）。
-  //                         host はこの値を X-Musubi-Probe に載せて gateway の詳細を受け取る。置いていない production は常に隠す
+  //                         host はこの値を X-Musunest-Probe に載せて gateway の詳細を受け取る。置いていない production は常に隠す
   //   この値の env ごとの形と、secret が vars に無いことは src/index.test.ts が確かめる。
   //
   // ⚠️ services / vars は env へ継承されない。だから3環境に丸ごと書く（data-api と同じ）。
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "musubi-dev-gateway",
+  "name": "musunest-dev-gateway",
   "main": "src/index.ts",
 
   // data-api / app-do と揃える（同梱 workerd 1.20260911.1 が受け付ける最大値。2026-09-14 着手時点）。
@@ -36,20 +36,20 @@
 
   "env": {
     "dev": {
-      "name": "musubi-dev-gateway",
+      "name": "musunest-dev-gateway",
       "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local", "HEALTHZ_DETAIL": "public" },
       // service は data-api の wrangler.jsonc の env.<env>.name。**同じ env の data-api に結ぶ**
-      "services": [{ "binding": "DATA_API", "service": "musubi-dev-data-api" }]
+      "services": [{ "binding": "DATA_API", "service": "musunest-dev-data-api" }]
     },
     "staging": {
-      "name": "musubi-staging-gateway",
+      "name": "musunest-staging-gateway",
       "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local", "HEALTHZ_DETAIL": "public" },
-      "services": [{ "binding": "DATA_API", "service": "musubi-staging-data-api" }]
+      "services": [{ "binding": "DATA_API", "service": "musunest-staging-data-api" }]
     },
     "production": {
-      "name": "musubi-production-gateway",
+      "name": "musunest-production-gateway",
       "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local", "HEALTHZ_DETAIL": "probe" },
-      "services": [{ "binding": "DATA_API", "service": "musubi-production-data-api" }]
+      "services": [{ "binding": "DATA_API", "service": "musunest-production-data-api" }]
     }
   }
 }

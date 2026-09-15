@@ -24,7 +24,7 @@ dist/
 .wrangler/
 *.tsbuildinfo
 
-# 非公開リポジトリ Kewton/Musubi-workspace へ分離した文書（→ workspace/mvp/m0/00b-decisions.md D-2）
+# 非公開リポジトリ Kewton/Musunest-workspace へ分離した文書（→ workspace/mvp/m0/00b-decisions.md D-2）
 # 再び置かれても公開リポジトリへ入らないようにする
 workspace/proposal/
 workspace/legal/

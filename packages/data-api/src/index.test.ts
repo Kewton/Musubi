@@ -46,7 +46,7 @@ const readConfig = (path: URL, env?: string) =>
 
 describe("data-api パッケージ", () => {
   it("パッケージ名が正本の名前と一致する", () => {
-    expect(PACKAGE_NAME).toBe("@musubi/data-api");
+    expect(PACKAGE_NAME).toBe("@musunest/data-api");
   });
 });
 
@@ -54,8 +54,8 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
   const config = readConfig(CONFIG_PATH, env);
   const appDo = readConfig(APP_DO_CONFIG_PATH);
 
-  it("Worker 名が musubi-<env>-data-api（gateway の Service Binding の宛先）", () => {
-    expect(config.name).toBe(`musubi-${env}-data-api`);
+  it("Worker 名が musunest-<env>-data-api（gateway の Service Binding の宛先）", () => {
+    expect(config.name).toBe(`musunest-${env}-data-api`);
   });
 
   it("外部ルートを持たない：workers.dev・Preview URL・routes のどれも無い", () => {
@@ -70,7 +70,7 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
     expect(config.d1_databases).toEqual([
       expect.objectContaining({
         binding: CONTROL_DB_BINDING,
-        database_name: `musubi-${env}-control`,
+        database_name: `musunest-${env}-control`,
         database_id: expect.any(String),
       }),
     ]);
@@ -89,8 +89,8 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
 
   it("R2 は BUNDLES と UPLOADS で、その env のバケットを指す", () => {
     expect(config.r2_buckets).toEqual([
-      expect.objectContaining({ binding: BUNDLES_BINDING, bucket_name: `musubi-${env}-bundles` }),
-      expect.objectContaining({ binding: UPLOADS_BINDING, bucket_name: `musubi-${env}-uploads` }),
+      expect.objectContaining({ binding: BUNDLES_BINDING, bucket_name: `musunest-${env}-bundles` }),
+      expect.objectContaining({ binding: UPLOADS_BINDING, bucket_name: `musunest-${env}-uploads` }),
     ]);
   });
 
@@ -244,7 +244,7 @@ describe("D1 マイグレーション（packages/control-plane/migrations）", (
   };
 
   beforeAll(() => {
-    persistTo = node.mkdtempSync(`${node.tmpdir()}/musubi-d1-migrations-`);
+    persistTo = node.mkdtempSync(`${node.tmpdir()}/musunest-d1-migrations-`);
     // 2回当てる。CD は main への push のたびに当てるので、2回目が何も当てないことまでが契約
     wrangler("d1", "migrations", "apply", CONTROL_DB_BINDING, ...devLocal());
     wrangler("d1", "migrations", "apply", CONTROL_DB_BINDING, ...devLocal());
@@ -269,10 +269,10 @@ describe("D1 マイグレーション（packages/control-plane/migrations）", (
     expect(applied.map((row) => row.name)).toEqual(sqlFiles());
   });
 
-  it("0001 が _musubi_meta を作る（03 §7）", () => {
+  it("0001 が _musunest_meta を作る（03 §7）", () => {
     const tables = query<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_musubi_meta'",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_musunest_meta'",
     );
-    expect(tables).toEqual([{ name: "_musubi_meta" }]);
+    expect(tables).toEqual([{ name: "_musunest_meta" }]);
   });
 });

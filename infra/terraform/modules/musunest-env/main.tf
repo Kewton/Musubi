@@ -7,7 +7,7 @@
 #   - Logpush … 有償なので作らない。観測は observability.enabled で賄う（06 §2）
 
 locals {
-  # 全リソース名をこれで揃える。既定では "musubi-<env>" で、変数化の前後で名前は変わらない。
+  # 全リソース名をこれで揃える。既定では "musunest-<env>"（2026-09-15 に "musubi-<env>" から改名。#75・README §7）。
   p = "${var.name_prefix}-${var.env}"
 }
 

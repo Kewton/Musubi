@@ -19,12 +19,12 @@
             "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
           },
           {
-            "group": ["@musubi/app-do", "@musubi/app-do/**"],
+            "group": ["@musunest/app-do", "@musunest/app-do/**"],
             "message": "gateway は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。data-api を Service Binding（DATA_API）で呼ぶ"
           },
           {
-            "group": ["@musubi/data-api/**", "**/packages/**"],
-            "message": "data-api の中身（D1 / R2 / DO の adapter）を持ち込まない。参照してよいのは @musubi/data-api の契約（contract.ts）だけ"
+            "group": ["@musunest/data-api/**", "**/packages/**"],
+            "message": "data-api の中身（D1 / R2 / DO の adapter）を持ち込まない。参照してよいのは @musunest/data-api の契約（contract.ts）だけ"
           },
           {
             "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],

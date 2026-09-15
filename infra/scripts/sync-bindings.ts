@@ -63,7 +63,7 @@ import {
 export const ENVS = ["dev", "staging", "production"] as const;
 export type Env = (typeof ENVS)[number];
 
-/** infra/terraform/modules/musubi-env/outputs.tf の `bindings`。キーを増やさない・減らさない・改名しない。 */
+/** infra/terraform/modules/musunest-env/outputs.tf の `bindings`。キーを増やさない・減らさない・改名しない。 */
 export interface Bindings {
   env: Env;
   account_id: string;

@@ -1,5 +1,5 @@
 {
-  "name": "@musubi/gateway",
+  "name": "@musunest/gateway",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,7 +20,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@musubi/control-plane": "workspace:*",
-    "@musubi/data-api": "workspace:*"
+    "@musunest/control-plane": "workspace:*",
+    "@musunest/data-api": "workspace:*"
   }
 }

@@ -20,7 +20,7 @@ name: rollback
 # ── 資格情報（CLAUDE.md「資格情報の置き場所」・04 §5）────────────────────────────
 # **production 環境の Secret**
 #     CLOUDFLARE_API_TOKEN_PROD / CLOUDFLARE_ACCOUNT_ID_PROD … ① だけ。wrangler には CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID として渡す
-#     SMOKE_BASE_URL / MUSUBI_PROBE_TOKEN                 … ② だけ（MUSUBI_PROBE_TOKEN は SMOKE_PROBE_TOKEN として。Worker には載せない）
+#     SMOKE_BASE_URL / MUSUNEST_PROBE_TOKEN                 … ② だけ（MUSUNEST_PROBE_TOKEN は SMOKE_PROBE_TOKEN として。Worker には載せない）
 # **使わない**：R2 の3つ（乖離チェックが無い）・アカウント①の資格情報・TF_CLOUDFLARE_API_TOKEN_PROD
 #
 # ── public リポジトリなので（deploy-production.yml と同じ規律）──────────────────────────
@@ -62,7 +62,7 @@ jobs:
           TO: ${{ inputs.to }}
           HAS_CLOUDFLARE_API_TOKEN_PROD: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD != '' }}
           HAS_CLOUDFLARE_ACCOUNT_ID_PROD: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD != '' }}
-          HAS_MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN != '' }}
+          HAS_MUSUNEST_PROBE_TOKEN: ${{ secrets.MUSUNEST_PROBE_TOKEN != '' }}
           HAS_SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL != '' }}
         run: |
           case "$REF" in
@@ -77,7 +77,7 @@ jobs:
             exit 1
           fi
           missing=0
-          for name in CLOUDFLARE_API_TOKEN_PROD CLOUDFLARE_ACCOUNT_ID_PROD MUSUBI_PROBE_TOKEN SMOKE_BASE_URL; do
+          for name in CLOUDFLARE_API_TOKEN_PROD CLOUDFLARE_ACCOUNT_ID_PROD MUSUNEST_PROBE_TOKEN SMOKE_BASE_URL; do
             has="HAS_${name}"
             if [ "${!has}" != true ]; then
               echo "::error::${name} が空。production 環境の Secret が未登録"
@@ -115,10 +115,10 @@ jobs:
         run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --rollback-to "$TO_SHA"
 
       # ── ② 貫通スモーク（03 §5）。host の version が to の commit であることを確かめる ──────────────
-      # 版は配った時点の MUSUBI_PROBE_TOKEN を持つ。その後に合言葉を変えていれば、ここが「詳細が隠された応答」で落ちる（runbook）
+      # 版は配った時点の MUSUNEST_PROBE_TOKEN を持つ。その後に合言葉を変えていれば、ここが「詳細が隠された応答」で落ちる（runbook）
       - name: ② 貫通スモーク（host → gateway → data-api → D1 / R2 / DO）
         env:
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
-          SMOKE_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          SMOKE_PROBE_TOKEN: ${{ secrets.MUSUNEST_PROBE_TOKEN }}
           TO_SHA: ${{ steps.to.outputs.sha }}
         run: pnpm smoke --env production --expect-sha "$TO_SHA"

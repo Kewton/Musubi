@@ -67,7 +67,7 @@ function syncErrorOf(fn: () => unknown): string {
 const DATA_API = `{
   // ★唯一の権限強制点。外部ルートを持たない
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "musubi-dev-data-api",
+  "name": "musunest-dev-data-api",
   "main": "src/index.ts",
   "compatibility_date": "2026-09-11", // 着手時に固定
   "workers_dev": false,
@@ -77,13 +77,13 @@ const DATA_API = `{
 
   "env": {
     "dev": {
-      "name": "musubi-dev-data-api",
+      "name": "musunest-dev-data-api",
       "d1_databases": [
         { "binding": "CONTROL_DB", "database_name": "dev-old-name", "database_id": "dev-old-id" }
       ]
     },
     "staging": {
-      "name": "musubi-staging-data-api",
+      "name": "musunest-staging-data-api",
       // D1 の database_id は destroy → apply で変わる。手で直さない
       "d1_databases": [
         {
@@ -102,7 +102,7 @@ const DATA_API = `{
       "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
     },
     "production": {
-      "name": "musubi-production-data-api",
+      "name": "musunest-production-data-api",
       "d1_databases": [
         { "binding": "CONTROL_DB", "database_name": "production-old-name", "database_id": "production-old-id" }
       ]
@@ -119,12 +119,12 @@ const DATA_API_STAGING_SYNCED = DATA_API.replace('"staging-old-name"', `"${STAGI
 
 // gateway の形（03 §2）。Terraform 由来の欄を持たない。
 const GATEWAY = `{
-  "name": "musubi-dev-gateway",
+  "name": "musunest-dev-gateway",
   "main": "src/index.ts",
   "env": {
-    "dev": { "services": [{ "binding": "DATA_API", "service": "musubi-dev-data-api" }] },
-    "staging": { "services": [{ "binding": "DATA_API", "service": "musubi-staging-data-api" }] },
-    "production": { "services": [{ "binding": "DATA_API", "service": "musubi-production-data-api" }] }
+    "dev": { "services": [{ "binding": "DATA_API", "service": "musunest-dev-data-api" }] },
+    "staging": { "services": [{ "binding": "DATA_API", "service": "musunest-staging-data-api" }] },
+    "production": { "services": [{ "binding": "DATA_API", "service": "musunest-production-data-api" }] }
   }
 }
 `;

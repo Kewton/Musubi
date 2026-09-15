@@ -27,7 +27,7 @@ type Dir = "worker" | "app";
 const BOUNDARY: readonly (readonly [name: string, source: string, expected: readonly string[]])[] = [
   [
     "app-do を import する",
-    `import { AppInstanceDO } from "@musubi/app-do";\nexport const x = AppInstanceDO;\n`,
+    `import { AppInstanceDO } from "@musunest/app-do";\nexport const x = AppInstanceDO;\n`,
     [NO_RESTRICTED_IMPORTS],
   ],
   [
@@ -37,7 +37,7 @@ const BOUNDARY: readonly (readonly [name: string, source: string, expected: read
   ],
   [
     "data-api の契約を import する（host は data-api 以下を参照しない）",
-    `import { HEALTHZ_PATH } from "@musubi/data-api";\nexport const x = HEALTHZ_PATH;\n`,
+    `import { HEALTHZ_PATH } from "@musunest/data-api";\nexport const x = HEALTHZ_PATH;\n`,
     [NO_RESTRICTED_IMPORTS],
   ],
   [

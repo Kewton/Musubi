@@ -12,18 +12,18 @@ IaC二層の上側。ここに置くのは「アカウントに属し、サー�
 
 | | 正本 | 管理対象 | いまの実装 |
 |---|---|---|---|
-| **持つ** | `infra/terraform/` | D1 database | `musubi-<env>-control`（Control Plane 専用。アプリのデータは DO/SQLite） |
-| **持つ** | 〃 | R2 bucket | `musubi-<env>-bundles` / `musubi-<env>-uploads` |
-| **持つ** | 〃 | Queues | `musubi-<env>-build`（M0 では器だけ。consumer は付けない） |
-| **持つ** | 〃 | KV 名前空間 | `musubi-<env>-kv`（用途未定の器。namespace id は `bindings` に出していない——出し方は Issue #5 で決める） |
-| **持つ（`count = 0`）** | 〃 | WfP dispatch namespace | `musubi-<env>-apps`。`wfp_enabled` を validation で `false` に固定しているので作られない。解禁は M5〜M6（`06` §5 W-1 / W-2） |
+| **持つ** | `infra/terraform/` | D1 database | `musunest-<env>-control`（Control Plane 専用。アプリのデータは DO/SQLite） |
+| **持つ** | 〃 | R2 bucket | `musunest-<env>-bundles` / `musunest-<env>-uploads` |
+| **持つ** | 〃 | Queues | `musunest-<env>-build`（M0 では器だけ。consumer は付けない） |
+| **持つ** | 〃 | KV 名前空間 | `musunest-<env>-kv`（用途未定の器。namespace id は `bindings` に出していない——出し方は Issue #5 で決める） |
+| **持つ（`count = 0`）** | 〃 | WfP dispatch namespace | `musunest-<env>-apps`。`wfp_enabled` を validation で `false` に固定しているので作られない。解禁は M5〜M6（`06` §5 W-1 / W-2） |
 | **持つ（未実装）** | 〃 | Turnstile widget / DNS レコード | `custom_domain_enabled` 待ち（H-04 ドメイン取得後） |
 | **持たない** | `wrangler.jsonc` | Worker script 本体 | `cloudflare_workers_script` は**使わない**。デプロイは wrangler が唯一の経路 |
 | **持たない** | 〃 | bindings・routes・compatibility date・secrets 参照 | 二重管理はドリフトの温床 |
 | **持たない** | 〃 | Durable Object のクラスと migration | `deleted_classes` を含め wrangler 側（`03` §4） |
 | **持たない** | — | Logpush | 有償。観測は Workers Logs（`observability.enabled`）で賄う（`06` §2） |
 
-名前の `musubi` は変数 `name_prefix` の既定値である（§7）。
+名前の `musunest` は変数 `name_prefix` の既定値である（§7）。
 
 **迷ったときの原則**
 
@@ -237,8 +237,12 @@ tfstate のバケットに限ってあるため（`00` H-03）。**`--env dev` �
 
 ## 7. リソース名の prefix（`name_prefix`）
 
-名称変更（N-1）に備えて、`musubi-` をモジュール変数 `name_prefix`（既定値 `"musubi"`）にしてある。
+名称変更（N-1）に備えて、資源名の先頭をモジュール変数 `name_prefix`（既定値 `"musunest"`）にしてある。
 3環境で揃えるものなので、env 側からは渡していない。
+
+> **2026-09-15 に既定値を `"musubi"` から `"musunest"` へ変えた（#75・プロダクト名の変更）。** 同時にモジュールのディレクトリを
+> `modules/musubi-env` から `modules/musunest-env` へ移した。production に実データが無いうちに、D1・R2 を3環境とも作り直した。
+> 下の2項目の実測は、変える前（既定値 `"musubi"`）のもの。
 
 - **変数化そのものは資源名を変えない。** 既定値のまま dev に `terraform plan -detailed-exitcode` を
   かけて **exit 0（No changes）** を実測した（2026-09-13・Issue #3）
@@ -253,5 +257,5 @@ tfstate のバケットに限ってあるため（`00` H-03）。**`--env dev` �
 
   staging / production に実データが入ってから変えるなら、データ移行の手順を先に作ること
 - **`name_prefix` が届かない名前がある。** tfstate バケット `musubi-tfstate` と state の key は
-  `backend` ブロックに変数を書けないので対象外。Worker 名（`musubi-<env>-data-api` 等）は
+  `backend` ブロックに変数を書けないので対象外（#75 の改名でも `musubi-tfstate` のまま）。Worker 名（`musunest-<env>-data-api` 等）は
   `wrangler.jsonc` 側の正本なので、これも Terraform の外で変える

@@ -1,4 +1,4 @@
-# Musubi monorepo — 作業規律
+# MUSUNEST monorepo — 作業規律
 
 ## 不変条件（破ったらPRを落とす）
 
@@ -33,7 +33,7 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 
 ## このリポジトリは public である
 
-- 公開しない文書（企画書・商標・名称検討）は **非公開リポジトリ `Kewton/Musubi-workspace`** にある
+- 公開しない文書（企画書・商標・名称検討）は **非公開リポジトリ `Kewton/Musunest-workspace`** にある
 - 出典を示すとき：企画書は**章番号だけ**で参照する。**内容を引き写さない**
 - 商標の結論（リスク評価・先行権利者名）、価格、moat 仮説、名称の代替候補を**ここに書かない**
 - **CIログ・PRコメント・アーティファクトもすべて公開される。** Variables はマスクされない
@@ -44,7 +44,7 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 | 置き場所 | 置くもの |
 |---|---|
 | リポジトリ Secret | dev/staging のトークン、R2 の鍵、**`CLOUDFLARE_ACCOUNT_ID`**、**`R2_S3_ENDPOINT`** |
-| **`production` 環境 Secret** | **`CLOUDFLARE_API_TOKEN_PROD`**、**`CLOUDFLARE_ACCOUNT_ID_PROD`**、**`SMOKE_BASE_URL`**（production の host の workers.dev のオリジン）、**`MUSUBI_PROBE_TOKEN`**（production の `/healthz` の合言葉。32 文字以上） |
+| **`production` 環境 Secret** | **`CLOUDFLARE_API_TOKEN_PROD`**、**`CLOUDFLARE_ACCOUNT_ID_PROD`**、**`SMOKE_BASE_URL`**（production の host の workers.dev のオリジン）、**`MUSUNEST_PROBE_TOKEN`**（production の `/healthz` の合言葉。32 文字以上） |
 | **`staging` 環境 Secret** | **`SMOKE_BASE_URL`**（staging の host の workers.dev のオリジン。`deploy-staging` の貫通スモークの宛先） |
 | GitHub に置かない | `TF_CLOUDFLARE_API_TOKEN_PROD`（production への apply は人が手元から） |
 | リポジトリ Variable | 公開してよい値だけ（`TFSTATE_BUCKET` など） |
@@ -55,7 +55,7 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 - **PR で production の plan を回さない**（`04` §3）
 - **workers.dev の URL を Variable にも CI のコマンド行にも出さない。** サブドメインがログに載る。貫通スモークの宛先は Secret から環境変数で渡し
   （`--base-url` を使わない）、`wrangler deploy` の出力は `infra/scripts/deploy-worker.ts` を通してホスト名を伏せる（`04` §4）
-- **`MUSUBI_PROBE_TOKEN` は `production` 環境の Secret の1か所だけに置く。** `deploy-production` が deploy のたびに
+- **`MUSUNEST_PROBE_TOKEN` は `production` 環境の Secret の1か所だけに置く。** `deploy-production` が deploy のたびに
   `--secrets-file` で host と gateway に載せ（`deploy-worker.ts` が一時ファイルに書いてすぐ消す）、貫通スモークには `SMOKE_PROBE_TOKEN` として渡す。
   **手で `wrangler secret put` をしない**（`04` §5）
 - **`production` 環境を宣言するのは `deploy-production.yml` だけ。** 他のワークフローに本番の Secret の名前を書かない（`deploy-worker.test.ts` が走査する）

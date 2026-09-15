@@ -6,7 +6,7 @@
 //   2. 期間と資格情報：UTC の日付・既定の 7 日・Analytics が読める幅。①と②が同じアカウントを指していたら止める
 //   3. 読み取り：GraphQL の応答を行にする。errors は伏せてから落とし、認可エラーは「トークンを作らずに止める」。行が上限に達したら落とす
 //   4. 判定：P-1（上限超過の起動）・P-2（3 日続けて 5 万）・P-3（2.5 GB）・P-4（D1 の行）とチェーン合計の上界
-//   5. CLI：GraphQL の読み取りしか呼ばない。出力に Account ID・トークン・namespace の ID・Musubi 以外の Worker 名が無い。終了コード
+//   5. CLI：GraphQL の読み取りしか呼ばない。出力に Account ID・トークン・namespace の ID・MUSUNEST 以外の Worker 名が無い。終了コード
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,10 +23,10 @@ import {
   EXIT_TOUCHED,
   FREE_LIMITS,
   isExceeded,
-  isMusubi,
+  isMusunest,
   judgeTriggers,
   MAX_DAYS,
-  musubiScript,
+  musunestScript,
   parsePeriod,
   parseReport,
   readCredentials,
@@ -84,19 +84,19 @@ const RECORDED = {
   invocations: [
     {
       avg: { sampleInterval: 1 },
-      dimensions: { date: "2026-09-14", scriptName: "musubi-staging-data-api", status: "success" },
+      dimensions: { date: "2026-09-14", scriptName: "musunest-staging-data-api", status: "success" },
       max: { cpuTime: 5685 },
       sum: { cpuTimeUs: 177654, errors: 0, requests: 68, subrequests: 68 },
     },
     {
       avg: { sampleInterval: 1.1363636363636365 },
-      dimensions: { date: "2026-09-14", scriptName: "musubi-staging-gateway", status: "success" },
+      dimensions: { date: "2026-09-14", scriptName: "musunest-staging-gateway", status: "success" },
       max: { cpuTime: 1993 },
       sum: { cpuTimeUs: 67038, errors: 0, requests: 75, subrequests: 75 },
     },
     {
       avg: { sampleInterval: 1.1384615384615384 },
-      dimensions: { date: "2026-09-14", scriptName: "musubi-staging-host", status: "success" },
+      dimensions: { date: "2026-09-14", scriptName: "musunest-staging-host", status: "success" },
       max: { cpuTime: 1846 },
       sum: { cpuTimeUs: 58770, errors: 0, requests: 74, subrequests: 74 },
     },
@@ -111,9 +111,9 @@ const RECORDED = {
  *   - host 14 回（サンプリングあり）max 3.30 ms・gateway 9 回 max 2.34 ms・data-api 7 回 max 11.30 ms（単体で上限を超えた。status は success）
  */
 const PRODUCTION_SPECS: readonly RowSpec[] = [
-  { name: "musubi-production-host", requests: 14, cpuMaxUs: 3_300, cpuTimeUs: 24_640, sampleInterval: 1.4 },
-  { name: "musubi-production-gateway", requests: 9, cpuMaxUs: 2_340, cpuTimeUs: 16_470 },
-  { name: "musubi-production-data-api", requests: 7, cpuMaxUs: 11_300, cpuTimeUs: 42_630 },
+  { name: "musunest-production-host", requests: 14, cpuMaxUs: 3_300, cpuTimeUs: 24_640, sampleInterval: 1.4 },
+  { name: "musunest-production-gateway", requests: 9, cpuMaxUs: 2_340, cpuTimeUs: 16_470 },
+  { name: "musunest-production-data-api", requests: 7, cpuMaxUs: 11_300, cpuTimeUs: 42_630 },
 ];
 
 function withAccount(account: object) {
@@ -167,7 +167,7 @@ const dataOf = (body: unknown): AccountData => parseReport(body, "アカウン�
 const rowsOf = (specs: readonly RowSpec[]): readonly InvocationRow[] => dataOf(gqlBody({ invocations: specs })).invocations;
 
 /** 期間の日付ごとに、1つの Worker が requests 回ずつ起動した行。 */
-const daily = (requests: readonly number[], name = musubiScript("production", "host")): RowSpec[] =>
+const daily = (requests: readonly number[], name = musunestScript("production", "host")): RowSpec[] =>
   datesOf(WEEK).flatMap((date, i) => ((requests[i] ?? 0) > 0 ? [{ date, name, requests: requests[i] ?? 0 }] : []));
 
 // ── 1. 契約 ───────────────────────────────────────────────────────────────
@@ -179,15 +179,15 @@ describe("契約：Worker 名・アカウント・上限と昇格トリガー", 
   it.each(ENVS.flatMap((env) => WORKERS.map((worker) => [env, worker] as const)))(
     "%s の %s の Worker 名が wrangler.jsonc の env.<env>.name と一致する",
     (env, worker) => {
-      expect(readConfig(CONFIG_PATHS[worker]).env[env]?.name).toBe(musubiScript(env, worker));
-      expect(isMusubi(musubiScript(env, worker))).toBe(true);
+      expect(readConfig(CONFIG_PATHS[worker]).env[env]?.name).toBe(musunestScript(env, worker));
+      expect(isMusunest(musunestScript(env, worker))).toBe(true);
     },
   );
 
-  it("Musubi 以外の名前・__unknown__ は Musubi に数えない", () => {
-    expect(isMusubi(OTHER_SCRIPT)).toBe(false);
-    expect(isMusubi(UNKNOWN_SCRIPT)).toBe(false);
-    expect(isMusubi("musubi-staging-host-old")).toBe(false);
+  it("MUSUNEST 以外の名前・__unknown__ は MUSUNEST に数えない", () => {
+    expect(isMusunest(OTHER_SCRIPT)).toBe(false);
+    expect(isMusunest(UNKNOWN_SCRIPT)).toBe(false);
+    expect(isMusunest("musunest-staging-host-old")).toBe(false);
   });
 
   it("アカウント①は dev と staging、②は production（06 §4.3 案A）。3つの環境がどちらか一方にだけある", () => {
@@ -320,7 +320,7 @@ describe("読み取り：GraphQL の応答", () => {
     expect(data.invocations).toHaveLength(3);
     expect(data.invocations[0]).toEqual({
       date: "2026-09-14",
-      scriptName: "musubi-staging-data-api",
+      scriptName: "musunest-staging-data-api",
       status: "success",
       requests: 68,
       errors: 0,
@@ -363,7 +363,7 @@ describe("P-2：日次リクエスト", () => {
   it("記録した応答：最大は 09-14 の 217 回（Service Binding の先も数える）", () => {
     const summary = summarizeRequests(dataOf(recordedBody()).invocations, WEEK);
     expect(summary.days).toHaveLength(7);
-    expect(summary.max).toEqual({ date: "2026-09-14", total: 217, musubi: 217, unknown: 0, other: 0 });
+    expect(summary.max).toEqual({ date: "2026-09-14", total: 217, musunest: 217, unknown: 0, other: 0 });
     expect(summary).toMatchObject({ daysOver: 0, longestRunOver: 0, otherScripts: 0, unknown: 0, sampled: true, touched: false });
   });
 
@@ -381,19 +381,19 @@ describe("P-2：日次リクエスト", () => {
     expect(summarizeRequests(rowsOf(daily([60_000, 50_000, 60_000, 60_000, 0, 0, 0])), WEEK).touched).toBe(false);
   });
 
-  it("Musubi 以外の Worker も合計に入れる（上限はアカウント単位）", () => {
+  it("MUSUNEST 以外の Worker も合計に入れる（上限はアカウント単位）", () => {
     const rows = rowsOf([
       ...daily([30_000, 30_000, 30_000]),
       ...daily([30_000, 30_000, 30_000], OTHER_SCRIPT),
     ]);
     const summary = summarizeRequests(rows, WEEK);
-    expect(summary.max).toMatchObject({ total: 60_000, musubi: 30_000, other: 30_000 });
+    expect(summary.max).toMatchObject({ total: 60_000, musunest: 30_000, other: 30_000 });
     expect(summary).toMatchObject({ otherScripts: 1, touched: true, overAtStart: true });
   });
 
   it("名前が __unknown__ の起動は合計に入れ、その他の Worker とは分けて数える", () => {
     const summary = summarizeRequests(rowsOf([{ name: UNKNOWN_SCRIPT, requests: 30 }, { name: OTHER_SCRIPT, requests: 2 }]), WEEK);
-    expect(summary.max).toEqual({ date: "2026-09-14", total: 32, musubi: 0, unknown: 30, other: 2 });
+    expect(summary.max).toEqual({ date: "2026-09-14", total: 32, musunest: 0, unknown: 30, other: 2 });
     expect(summary).toMatchObject({ otherScripts: 1, unknown: 30 });
   });
 });
@@ -406,24 +406,24 @@ describe("P-1：上限超過の起動", () => {
     }
   });
 
-  it("Musubi の Worker に 1 回でもあれば触れた。名前が __unknown__ の起動も Musubi に数える", () => {
-    expect(summarizeExceeded(rowsOf([{ name: musubiScript("production", "data-api"), status: "exceededResources", requests: 1 }])))
-      .toEqual({ musubi: 1, unknown: 0, other: 0, touched: true });
+  it("MUSUNEST の Worker に 1 回でもあれば触れた。名前が __unknown__ の起動も MUSUNEST に数える", () => {
+    expect(summarizeExceeded(rowsOf([{ name: musunestScript("production", "data-api"), status: "exceededResources", requests: 1 }])))
+      .toEqual({ musunest: 1, unknown: 0, other: 0, touched: true });
     expect(summarizeExceeded(rowsOf([{ name: UNKNOWN_SCRIPT, status: "exceededResources", requests: 2 }]))).toMatchObject({
       unknown: 2,
       touched: true,
     });
   });
 
-  it("Musubi 以外の Worker の超過は参考に出すだけで、触れたことにしない", () => {
+  it("MUSUNEST 以外の Worker の超過は参考に出すだけで、触れたことにしない", () => {
     expect(
       summarizeExceeded(
         rowsOf([
           { name: OTHER_SCRIPT, status: "exceededResources", requests: 5 },
-          { name: musubiScript("staging", "host"), status: "scriptThrewException", requests: 3 },
+          { name: musunestScript("staging", "host"), status: "scriptThrewException", requests: 3 },
         ]),
       ),
-    ).toEqual({ musubi: 0, unknown: 0, other: 5, touched: false });
+    ).toEqual({ musunest: 0, unknown: 0, other: 5, touched: false });
   });
 });
 
@@ -444,12 +444,12 @@ describe("CPU 時間：チェーン合計の上界", () => {
     expect(summarizeCpu(rows, "dev")).toMatchObject({ chainMaxMs: undefined, marginMs: undefined });
   });
 
-  it("日と status をまたいで、回数は足し、max は最大を取る。Musubi 以外の Worker は見ない", () => {
+  it("日と status をまたいで、回数は足し、max は最大を取る。MUSUNEST 以外の Worker は見ない", () => {
     const rows = rowsOf([
-      { date: "2026-09-13", name: musubiScript("production", "host"), requests: 10, cpuMaxUs: 1_200, cpuTimeUs: 6_000 },
-      { date: "2026-09-14", name: musubiScript("production", "host"), requests: 30, cpuMaxUs: 2_400, cpuTimeUs: 18_000 },
-      { date: "2026-09-14", name: musubiScript("production", "host"), status: "clientDisconnected", requests: 1, cpuMaxUs: 900 },
-      { name: musubiScript("production", "gateway"), requests: 41, cpuMaxUs: 1_000 },
+      { date: "2026-09-13", name: musunestScript("production", "host"), requests: 10, cpuMaxUs: 1_200, cpuTimeUs: 6_000 },
+      { date: "2026-09-14", name: musunestScript("production", "host"), requests: 30, cpuMaxUs: 2_400, cpuTimeUs: 18_000 },
+      { date: "2026-09-14", name: musunestScript("production", "host"), status: "clientDisconnected", requests: 1, cpuMaxUs: 900 },
+      { name: musunestScript("production", "gateway"), requests: 41, cpuMaxUs: 1_000 },
       { name: OTHER_SCRIPT, requests: 5, cpuMaxUs: 300_000 },
     ]);
     const production = summarizeCpu(rows, "production");
@@ -474,7 +474,7 @@ describe("CPU 時間の注意（昇格トリガーではない）", () => {
   });
 
   it("余裕が 3 ms 以上で、単体でも超えていなければ何も出さない", () => {
-    const quiet = rowsOf(WORKERS.map((worker) => ({ name: musubiScript("staging", worker), requests: 20, cpuMaxUs: 2_000 })));
+    const quiet = rowsOf(WORKERS.map((worker) => ({ name: musunestScript("staging", worker), requests: 20, cpuMaxUs: 2_000 })));
     expect(cpuCautions([summarizeAccount("1", { invocations: quiet, doStorage: [], d1: [] }, WEEK)])).toEqual([]);
   });
 });
@@ -573,7 +573,7 @@ async function runHarness(
   return { code, out, all: [...out, ...err].join("\n"), calls };
 }
 
-/** 出力のどこにも ID・トークン・Musubi 以外の Worker 名が無い。 */
+/** 出力のどこにも ID・トークン・MUSUNEST 以外の Worker 名が無い。 */
 function expectNothingSecret(run: Harness): void {
   for (const secret of [ACCOUNT_ID, PROD_ACCOUNT_ID, TOKEN, PROD_TOKEN, NAMESPACE_ID, OTHER_SCRIPT, "https://"]) {
     expect(run.all).not.toContain(secret);
@@ -596,7 +596,7 @@ describe("CLI", () => {
     expect(run.out.at(-1)).toMatch(/^free-tier-report: OK/);
     expect(run.all).toContain("══ アカウント①（dev + staging）");
     expect(run.all).toContain("══ アカウント②（production）");
-    expect(run.all).toContain("最大 217 req/日（2026-09-14。Musubi 217・名前なし 0・その他 0）");
+    expect(run.all).toContain("最大 217 req/日（2026-09-14。MUSUNEST 217・名前なし 0・その他 0）");
     expect(run.all).toContain("チェーン合計の上界（期間中の max の和） 9.52 ms（余裕 0.48 ms）");
     expect(run.all).toContain(`合算で判定されるなら余裕が ${CHAIN_MARGIN_FLOOR_MS} ms 未満`);
     expect(run.all).toContain("最大 0.02 MB（24,576 bytes・2026-09-14）");
@@ -623,17 +623,17 @@ describe("CLI", () => {
       respond: () => gqlBody({ invocations: [{ name: UNKNOWN_SCRIPT, requests: 30, cpuMaxUs: 4_000 }] }),
     });
     expect(run.code).toBe(EXIT_OK);
-    expect(run.all).toContain("最大 30 req/日（2026-09-14。Musubi 0・名前なし 30・その他 0）  その他の Worker 0 本");
+    expect(run.all).toContain("最大 30 req/日（2026-09-14。MUSUNEST 0・名前なし 30・その他 0）  その他の Worker 0 本");
     expect(run.all).toContain(`名前が ${UNKNOWN_SCRIPT} の起動が 30 回あり、どの Worker か決められないので CPU 時間に入れていない`);
     expect(run.all).toContain("production: 期間中の起動なし");
   });
 
   it("P-1〜P-4 のどれかに触れたら exit 2（議論せず即上げる）", async () => {
     const run = await runHarness(["--account", "2"], {
-      respond: () => gqlBody({ invocations: [{ name: musubiScript("production", "host"), status: "exceededResources", requests: 1 }] }),
+      respond: () => gqlBody({ invocations: [{ name: musunestScript("production", "host"), status: "exceededResources", requests: 1 }] }),
     });
     expect(run.code).toBe(EXIT_TOUCHED);
-    expect(run.all).toContain("P-1: 触れた — Musubi の Worker に上限超過");
+    expect(run.all).toContain("P-1: 触れた — MUSUNEST の Worker に上限超過");
     expect(run.out.at(-1)).toContain("P-1 に触れた。議論せず即上げる");
   });
 

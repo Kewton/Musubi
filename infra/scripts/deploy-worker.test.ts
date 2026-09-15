@@ -2,13 +2,13 @@
 // **実環境には一切届かない**（動かす wrangler は偽物か、--dry-run の実物だけ）。
 //
 //   1. 契約：配る Worker の集合が infra:sync の同期先と一致し、host は配る env でビルドされる（turbo・ルートの deploy:*）。
-//      secret（MUSUBI_PROBE_TOKEN）を載せる Worker と env が、host / gateway の wrangler.jsonc の HEALTHZ_DETAIL と一致する
+//      secret（MUSUNEST_PROBE_TOKEN）を載せる Worker と env が、host / gateway の wrangler.jsonc の HEALTHZ_DETAIL と一致する
 //   2. wrangler の呼び方：target ごとの引数と cwd。deploy は --sha が必須。載せる secret の名前と、値の検査
 //   3. 伏せる：workers.dev のホスト名・Account ID・secret の値が、要約にも失敗の全文にも出ない（ANSI で割られていても）
 //   4. CLI：偽の wrangler を動かし、出力をファイルに受けてから要約だけを出す。失敗は伏せた全文を出して exit 1。
 //      secret は一時ファイル（0600）で --secrets-file に渡し、wrangler が終わったら消す。
 //      実物の wrangler も --dry-run で動かし、要約の行の形が wrangler の出力と食い違っていないかを見る
-//      （gateway を配る形。@musubi/data-api の dist を読むので、`pnpm test` は turbo run test の後にここを走らせる）
+//      （gateway を配る形。@musunest/data-api の dist を読むので、`pnpm test` は turbo run test の後にここを走らせる）
 //   5. ワークフロー：乖離チェック → build → migration → deploy（data-api → gateway → host）→ smoke の順で、
 //      資格情報はそれを使うステップにだけ渡す。staging は main への push と手動実行、production は v タグと手動実行だけで起動する
 //   6. production の資格情報（production 環境の Secret）に届くのは deploy-production.yml と rollback.yml だけ。staging のワークフローからは届かない
@@ -85,7 +85,7 @@ const BEL = String.fromCharCode(7);
 const SUBDOMAIN = "fixture-sub-7c2e91";
 const ACCOUNT_ID = "fixture-account-id-5b3d80a4e1";
 const ACCOUNT_ID_HEX = "9f8e7d6c5b4a39281706f5e4d3c2b1a0";
-/** 目印。production の gateway と host に載せる MUSUBI_PROBE_TOKEN の代わり（ヘッダに載る文字だけで、下限の長さを満たす） */
+/** 目印。production の gateway と host に載せる MUSUNEST_PROBE_TOKEN の代わり（ヘッダに載る文字だけで、下限の長さを満たす） */
 const PROBE_TOKEN = "fixture-probe-token-3a9d5e1c7b2f4086";
 /** 目印。版とデプロイの記録（wrangler versions / deployments の --json）に載る author_email の代わり */
 const AUTHOR_EMAIL = "fixture-author-6e2b@example.com";
@@ -108,9 +108,9 @@ const DEPLOY_OUTPUT = [
   " ⛅️ wrangler 4.131.1",
   "────────────────────",
   "Using redirected Wrangler configuration.",
-  ' - Configuration being used: "dist/musubi_dev_host/wrangler.json"',
+  ' - Configuration being used: "dist/musunest_dev_host/wrangler.json"',
   "🌀 Building list of assets...",
-  "✨ Read 5 files from the assets directory /home/runner/work/Musubi/Musubi/apps/host/dist/client",
+  "✨ Read 5 files from the assets directory /home/runner/work/Musunest/Musunest/apps/host/dist/client",
   "🌀 Starting asset upload...",
   "+ /index.html",
   "Uploaded 1 of 1 asset",
@@ -120,19 +120,19 @@ const DEPLOY_OUTPUT = [
   "Worker Startup Time: 3 ms",
   "Your Worker has access to the following bindings:",
   "Binding                                          Resource                  ",
-  "env.GATEWAY (musubi-staging-gateway)             Worker                    ",
+  "env.GATEWAY (musunest-staging-gateway)             Worker                    ",
   'env.ENVIRONMENT ("staging")                      Environment Variable      ',
   'env.GIT_SHA ("(hidden)")                         Environment Variable      ',
   "",
   `${ESC}[33m▲ ${ESC}[43;33m[${ESC}[43;30mWARNING${ESC}[43;33m]${ESC}[0m ${ESC}[1mYou are enabling the 'workers.dev' subdomain for this Worker, but Preview URLs are still disabled.${ESC}[0m`,
   "  Preview URLs will automatically generate a unique, shareable link for each new version which will be accessible at:",
-  `    https://<VERSION_PREFIX>-musubi-staging-host.${SUBDOMAIN}.workers.dev`,
+  `    https://<VERSION_PREFIX>-musunest-staging-host.${SUBDOMAIN}.workers.dev`,
   "",
-  `See https://dash.cloudflare.com/${ACCOUNT_ID_HEX}/workers/services/view/musubi-staging-host`,
-  "Uploaded musubi-staging-host (4.21 sec)",
-  "Deployed musubi-staging-host triggers (0.83 sec)",
+  `See https://dash.cloudflare.com/${ACCOUNT_ID_HEX}/workers/services/view/musunest-staging-host`,
+  "Uploaded musunest-staging-host (4.21 sec)",
+  "Deployed musunest-staging-host triggers (0.83 sec)",
   // 色の切り替えがホスト名の途中に入り、OSC 8 のリンクが URL を運ぶ形
-  `  ${ESC}]8;;https://musubi-staging-host.${SUBDOMAIN}.workers.dev${BEL}https://musubi-staging-host.${ESC}[1m${SUBDOMAIN}${ESC}[22m.workers.dev${ESC}]8;;${BEL}`,
+  `  ${ESC}]8;;https://musunest-staging-host.${SUBDOMAIN}.workers.dev${BEL}https://musunest-staging-host.${ESC}[1m${SUBDOMAIN}${ESC}[22m.workers.dev${ESC}]8;;${BEL}`,
   "Current Version ID: 0f6c9f7e-1a2b-4c3d-8e9f-0123456789ab",
   "",
 ].join("\n");
@@ -166,7 +166,7 @@ const MIGRATE_OUTPUT = [
 const FAILED_OUTPUT = [
   "",
   " ⛅️ wrangler 4.131.1",
-  `${ESC}[31m✘ ${ESC}[41;31m[${ESC}[41;97mERROR${ESC}[41;31m]${ESC}[0m ${ESC}[1mA request to the Cloudflare API (/accounts/${ACCOUNT_ID}/workers/scripts/musubi-staging-host) failed.${ESC}[0m`,
+  `${ESC}[31m✘ ${ESC}[41;31m[${ESC}[41;97mERROR${ESC}[41;31m]${ESC}[0m ${ESC}[1mA request to the Cloudflare API (/accounts/${ACCOUNT_ID}/workers/scripts/musunest-staging-host) failed.${ESC}[0m`,
   "  Authentication error [code: 10000]",
   `  You need to register a workers.dev subdomain: https://${SUBDOMAIN}.workers.dev`,
   "::error::injected by a response",
@@ -211,7 +211,7 @@ describe("契約：配る Worker と、host をどの env でビルドするか"
 
   it("載せる secret の名前は host と gateway の contract の PROBE_TOKEN_SECRET と同じ", () => {
     expect(PROBE_TOKEN_SECRET).toBe(HOST_PROBE_TOKEN_SECRET);
-    // gateway の contract は @musubi/data-api を import するので、ここでは文字列で照合する
+    // gateway の contract は @musunest/data-api を import するので、ここでは文字列で照合する
     expect(readFileSync(join(ROOT, "apps/gateway/src/contract.ts"), "utf8")).toContain(
       `export const PROBE_TOKEN_SECRET = "${PROBE_TOKEN_SECRET}" as const;`,
     );
@@ -246,8 +246,8 @@ describe("wranglerCall：target ごとの wrangler の呼び方", () => {
 
   it.each([
     ["data-api", "packages/data-api", []],
-    ["gateway", "apps/gateway", ["MUSUBI_PROBE_TOKEN"]],
-    ["host", "apps/host", ["MUSUBI_PROBE_TOKEN"]],
+    ["gateway", "apps/gateway", ["MUSUNEST_PROBE_TOKEN"]],
+    ["host", "apps/host", ["MUSUNEST_PROBE_TOKEN"]],
   ] as const)("%s は %s で wrangler deploy --env production --var GIT_SHA:<sha>。production で載せる secret は %j", (target, cwd, secrets) => {
     expect(wranglerCall(target, "production", SHA)).toEqual({
       kind: "deploy",
@@ -276,8 +276,8 @@ describe("readSecrets：載せる secret の値を環境変数から読む", () 
   });
 
   it.each([
-    ["無い", undefined, "環境変数 MUSUBI_PROBE_TOKEN が要る"],
-    ["空（GitHub Actions は無い Secret を空文字にする）", "", "環境変数 MUSUBI_PROBE_TOKEN が要る"],
+    ["無い", undefined, "環境変数 MUSUNEST_PROBE_TOKEN が要る"],
+    ["空（GitHub Actions は無い Secret を空文字にする）", "", "環境変数 MUSUNEST_PROBE_TOKEN が要る"],
     ["空白を含む", `${PROBE_TOKEN} x`, "ヘッダに載せられない文字"],
     ["末尾に改行", `${PROBE_TOKEN}\n`, "ヘッダに載せられない文字"],
     ["非 ASCII", `${PROBE_TOKEN}合言葉`, "ヘッダに載せられない文字"],
@@ -295,7 +295,7 @@ describe("readSecrets：載せる secret の値を環境変数から読む", () 
     expect(text).not.toContain(PROBE_TOKEN.slice(0, 12));
   });
 
-  it("deploy-worker が受け付ける値は、smoke が SMOKE_PROBE_TOKEN として受け付ける（同じ値を X-Musubi-Probe に載せる）", () => {
+  it("deploy-worker が受け付ける値は、smoke が SMOKE_PROBE_TOKEN として受け付ける（同じ値を X-Musunest-Probe に載せる）", () => {
     const value = readSecrets([PROBE_TOKEN_SECRET], { [PROBE_TOKEN_SECRET]: PROBE_TOKEN })[PROBE_TOKEN_SECRET];
     expect(probeToken(value, "production")).toBe(PROBE_TOKEN);
   });
@@ -308,15 +308,15 @@ describe("伏せる：workers.dev のホスト名・Account ID・secret の値",
   const HEX_SECRET = "a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5";
 
   it.each([
-    ["URL", `https://musubi-staging-host.${SUBDOMAIN}.workers.dev`, `https://${REDACTED_HOST}`],
-    ["スキーム無し・大文字", `MUSUBI-STAGING-HOST.${SUBDOMAIN.toUpperCase()}.WORKERS.DEV:443`, `${REDACTED_HOST}:443`],
-    ["プレビュー URL", `https://<VERSION_PREFIX>-musubi-staging-host.${SUBDOMAIN}.workers.dev/x`, `https://<VERSION_PREFIX>${REDACTED_HOST}/x`],
+    ["URL", `https://musunest-staging-host.${SUBDOMAIN}.workers.dev`, `https://${REDACTED_HOST}`],
+    ["スキーム無し・大文字", `MUSUNEST-STAGING-HOST.${SUBDOMAIN.toUpperCase()}.WORKERS.DEV:443`, `${REDACTED_HOST}:443`],
+    ["プレビュー URL", `https://<VERSION_PREFIX>-musunest-staging-host.${SUBDOMAIN}.workers.dev/x`, `https://<VERSION_PREFIX>${REDACTED_HOST}/x`],
     ["サブドメインだけ", `https://${SUBDOMAIN}.workers.dev`, `https://${REDACTED_HOST}`],
     ["色で割られたホスト名", `a.${ESC}[1m${SUBDOMAIN}${ESC}[22m.workers.dev`, REDACTED_HOST],
     ["OSC 8 のリンク", `${ESC}]8;;https://a.${SUBDOMAIN}.workers.dev${BEL}link${ESC}]8;;${BEL}`, "link"],
     ["Account ID の形", `/accounts/${ACCOUNT_ID_HEX}/workers`, `/accounts/${REDACTED_ACCOUNT}/workers`],
     ["CLOUDFLARE_ACCOUNT_ID の値", `/accounts/${ACCOUNT_ID}/workers`, `/accounts/${REDACTED_ACCOUNT}/workers`],
-    ["載せた secret の値", `MUSUBI_PROBE_TOKEN=${PROBE_TOKEN}`, `MUSUBI_PROBE_TOKEN=${REDACTED_SECRET}`],
+    ["載せた secret の値", `MUSUNEST_PROBE_TOKEN=${PROBE_TOKEN}`, `MUSUNEST_PROBE_TOKEN=${REDACTED_SECRET}`],
     ["Account ID の形をした secret の値も secret として伏せる", `x ${HEX_SECRET} y`, `x ${REDACTED_SECRET} y`],
   ])("%s", (_, line, expected) => {
     const redacted = redact(line, ACCOUNT_ID, [PROBE_TOKEN, HEX_SECRET]);
@@ -325,7 +325,7 @@ describe("伏せる：workers.dev のホスト名・Account ID・secret の値",
   });
 
   it("workers.dev のホスト名でないもの（'workers.dev' という語・Worker 名・UUID・commit の SHA）は伏せない", () => {
-    const line = `the 'workers.dev' route of musubi-staging-host, version 0f6c9f7e-1a2b-4c3d-8e9f-0123456789ab, GIT_SHA:${SHA}`;
+    const line = `the 'workers.dev' route of musunest-staging-host, version 0f6c9f7e-1a2b-4c3d-8e9f-0123456789ab, GIT_SHA:${SHA}`;
     expect(redact(line, ACCOUNT_ID)).toBe(line);
   });
 
@@ -345,12 +345,12 @@ describe("要約：成功したときは許した行だけを出す", () => {
       "Worker Startup Time: 3 ms",
       "Your Worker has access to the following bindings:",
       "Binding                                          Resource                  ",
-      "env.GATEWAY (musubi-staging-gateway)             Worker                    ",
+      "env.GATEWAY (musunest-staging-gateway)             Worker                    ",
       'env.ENVIRONMENT ("staging")                      Environment Variable      ',
       'env.GIT_SHA ("(hidden)")                         Environment Variable      ',
       "▲ [WARNING] You are enabling the 'workers.dev' subdomain for this Worker, but Preview URLs are still disabled.",
-      "Uploaded musubi-staging-host (4.21 sec)",
-      "Deployed musubi-staging-host triggers (0.83 sec)",
+      "Uploaded musunest-staging-host (4.21 sec)",
+      "Deployed musunest-staging-host triggers (0.83 sec)",
       `  https://${REDACTED_HOST}`,
       "Current Version ID: 0f6c9f7e-1a2b-4c3d-8e9f-0123456789ab",
     ]);
@@ -378,7 +378,7 @@ describe("失敗：全文を伏せてから出す", () => {
   it("エラーの文言は残し、Account ID・workers.dev のホスト名・ワークフローコマンドは残さない", () => {
     const lines = failureLines(FAILED_OUTPUT, ACCOUNT_ID);
     expect(lines).toContain(
-      `✘ [ERROR] A request to the Cloudflare API (/accounts/${REDACTED_ACCOUNT}/workers/scripts/musubi-staging-host) failed.`,
+      `✘ [ERROR] A request to the Cloudflare API (/accounts/${REDACTED_ACCOUNT}/workers/scripts/musunest-staging-host) failed.`,
     );
     expect(lines).toContain("  Authentication error [code: 10000]");
     expect(lines).toContain(`  You need to register a workers.dev subdomain: https://${REDACTED_HOST}`);
@@ -408,7 +408,7 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
         "const at = process.argv.indexOf('--secrets-file');",
         "const file = at === -1 ? undefined : process.argv[at + 1];",
         "const secretsFile = file === undefined ? undefined : { path: file, content: readFileSync(file, 'utf8'), mode: statSync(file).mode & 0o777, dirMode: statSync(dirname(file)).mode & 0o777 };",
-        "writeFileSync(FAKE_RECORD, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), forceColor: process.env.FORCE_COLOR, stdinIsTTY: process.stdin.isTTY ?? false, probeTokenEnv: process.env.MUSUBI_PROBE_TOKEN, secretsFile }));",
+        "writeFileSync(FAKE_RECORD, JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(), forceColor: process.env.FORCE_COLOR, stdinIsTTY: process.stdin.isTTY ?? false, probeTokenEnv: process.env.MUSUNEST_PROBE_TOKEN, secretsFile }));",
         "process.stdout.write(Buffer.from(FAKE_STDOUT, 'base64'));",
         "process.stderr.write(Buffer.from(FAKE_STDERR, 'base64'));",
         "process.exitCode = Number(FAKE_EXIT);",
@@ -432,7 +432,7 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
           cwd: string;
           forceColor?: string;
           stdinIsTTY: boolean;
-          /** 子プロセスに届いた環境変数 MUSUBI_PROBE_TOKEN */
+          /** 子プロセスに届いた環境変数 MUSUNEST_PROBE_TOKEN */
           probeTokenEnv?: string;
           secretsFile?: { path: string; content: string; mode: number; dirMode: number };
         }
@@ -471,7 +471,7 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
   it("成功：wrangler を target の cwd で動かし、全文はファイルに、ログには伏せた要約だけを出して exit 0", async () => {
     const run = await deployWorker(["--env", "staging", "--target", "host", "--sha", SHA], {
       stdout: DEPLOY_OUTPUT,
-      stderr: `${ESC}[33m▲ [WARNING]${ESC}[0m Worker at https://musubi-staging-host.${SUBDOMAIN}.workers.dev\n`,
+      stderr: `${ESC}[33m▲ [WARNING]${ESC}[0m Worker at https://musunest-staging-host.${SUBDOMAIN}.workers.dev\n`,
     });
     expect(run.code).toBe(EXIT_OK);
     expect(run.record).toEqual({
@@ -483,7 +483,7 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
 
     // ファイルには wrangler の出力がそのまま残る（CI のアーティファクトにしない）
     const log = readFileSync(join(dir, "deploy-worker-staging-host.log"), "utf8");
-    expect(log).toContain(`musubi-staging-host.${SUBDOMAIN}.workers.dev`);
+    expect(log).toContain(`musunest-staging-host.${SUBDOMAIN}.workers.dev`);
 
     expect(run.out[0]).toBe(`deploy-worker: host（env=staging）: wrangler deploy --env staging --var GIT_SHA:${SHA}（apps/host）`);
     expect(run.out).toContain("  Current Version ID: 0f6c9f7e-1a2b-4c3d-8e9f-0123456789ab");
@@ -536,7 +536,7 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
       });
       expect(run.code, run.all).toBe(EXIT_OK);
       expect(run.out).toContainEqual(expect.stringMatching(/^ {2}Total Upload: /));
-      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.DATA_API \(musubi-staging-data-api\)\s+Worker/));
+      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.DATA_API \(musunest-staging-data-api\)\s+Worker/));
       // --var で渡した GIT_SHA は設定の "local" を上書きし、wrangler は値を伏せて表示する
       expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.GIT_SHA \("\(hidden\)"\)\s+Environment Variable/));
     },
@@ -545,8 +545,8 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
 
   // dev へ配る（reproduce-dev.sh の ④。試験A）。host は vite build の出力を配るので、ここでは build の要らない2つを見る
   it.each([
-    ["data-api", /^ {2}env\.BUNDLES \(musubi-dev-bundles\)\s+R2 Bucket/],
-    ["gateway", /^ {2}env\.DATA_API \(musubi-dev-data-api\)\s+Worker/],
+    ["data-api", /^ {2}env\.BUNDLES \(musunest-dev-bundles\)\s+R2 Bucket/],
+    ["gateway", /^ {2}env\.DATA_API \(musunest-dev-data-api\)\s+Worker/],
   ] as const)(
     "実物の wrangler（--dry-run）で dev の %s も同じ形で配れ、要約が dev の binding を拾う。secret は載せない",
     async (target, binding) => {
@@ -576,11 +576,11 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
   /** RUNNER_TEMP に残っている secret の一時ディレクトリ */
   const leftoverSecretDirs = (): string[] => readdirSync(dir).filter((name) => name.startsWith("deploy-worker-secrets-"));
 
-  it("production の gateway：MUSUBI_PROBE_TOKEN を一時ファイル（0600）に書いて --secrets-file で渡し、終わったらすぐ消す。値は出さない", async () => {
+  it("production の gateway：MUSUNEST_PROBE_TOKEN を一時ファイル（0600）に書いて --secrets-file で渡し、終わったらすぐ消す。値は出さない", async () => {
     const run = await deployWorker(
       ["--env", "production", "--target", "gateway", "--sha", SHA],
       // wrangler が値を出してしまった場合でも伏せる
-      { stdout: `Total Upload: 1 KiB\nenv.MUSUBI_PROBE_TOKEN ("${PROBE_TOKEN}")  Environment Variable\n` },
+      { stdout: `Total Upload: 1 KiB\nenv.MUSUNEST_PROBE_TOKEN ("${PROBE_TOKEN}")  Environment Variable\n` },
       { env: { [PROBE_TOKEN_SECRET]: PROBE_TOKEN } },
     );
     expect(run.code, run.all).toBe(EXIT_OK);
@@ -600,9 +600,9 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
     expect(leftoverSecretDirs()).toEqual([]);
 
     expect(run.out[0]).toBe(
-      `deploy-worker: gateway（env=production）: wrangler deploy --env production --var GIT_SHA:${SHA} --secrets-file <一時ファイル: MUSUBI_PROBE_TOKEN>（apps/gateway）`,
+      `deploy-worker: gateway（env=production）: wrangler deploy --env production --var GIT_SHA:${SHA} --secrets-file <一時ファイル: MUSUNEST_PROBE_TOKEN>（apps/gateway）`,
     );
-    expect(run.out).toContain(`  env.MUSUBI_PROBE_TOKEN ("${REDACTED_SECRET}")  Environment Variable`);
+    expect(run.out).toContain(`  env.MUSUNEST_PROBE_TOKEN ("${REDACTED_SECRET}")  Environment Variable`);
     expectRedacted(run.all);
   });
 
@@ -621,22 +621,22 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
     expectRedacted(run.all);
   });
 
-  it.each(["gateway", "host"] as const)("production の %s は、MUSUBI_PROBE_TOKEN が無ければ wrangler を起動せずに exit 1", async (target) => {
+  it.each(["gateway", "host"] as const)("production の %s は、MUSUNEST_PROBE_TOKEN が無ければ wrangler を起動せずに exit 1", async (target) => {
     for (const env of [{}, { [PROBE_TOKEN_SECRET]: "" }]) {
       const run = await deployWorker(["--env", "production", "--target", target, "--sha", SHA], {}, { env });
       expect(run.code).toBe(EXIT_NG);
       expect(run.record).toBeUndefined();
-      expect(run.err[0]).toContain("deploy-worker: 環境変数 MUSUBI_PROBE_TOKEN が要る");
+      expect(run.err[0]).toContain("deploy-worker: 環境変数 MUSUNEST_PROBE_TOKEN が要る");
     }
     expect(leftoverSecretDirs()).toEqual([]);
   });
 
-  it("production の host は、MUSUBI_PROBE_TOKEN が短すぎれば wrangler を起動せずに exit 1。値は出さない", async () => {
+  it("production の host は、MUSUNEST_PROBE_TOKEN が短すぎれば wrangler を起動せずに exit 1。値は出さない", async () => {
     const short = PROBE_TOKEN.slice(0, PROBE_TOKEN_MIN_LENGTH - 1);
     const run = await deployWorker(["--env", "production", "--target", "host", "--sha", SHA], {}, { env: { [PROBE_TOKEN_SECRET]: short } });
     expect(run.code).toBe(EXIT_NG);
     expect(run.record).toBeUndefined();
-    expect(run.err[0]).toContain("deploy-worker: MUSUBI_PROBE_TOKEN が短すぎる");
+    expect(run.err[0]).toContain("deploy-worker: MUSUNEST_PROBE_TOKEN が短すぎる");
     expect(run.all).not.toContain(short);
   });
 
@@ -645,7 +645,7 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
     ["production の migrate", ["--env", "production", "--target", "migrate"]],
     ["staging の host", ["--env", "staging", "--target", "host", "--sha", SHA]],
     ["staging の gateway", ["--env", "staging", "--target", "gateway", "--sha", SHA]],
-  ])("%s は MUSUBI_PROBE_TOKEN があっても載せず、子プロセスにも渡さない", async (_, argv) => {
+  ])("%s は MUSUNEST_PROBE_TOKEN があっても載せず、子プロセスにも渡さない", async (_, argv) => {
     const run = await deployWorker(argv, { stdout: "Total Upload: 1 KiB\n" }, { env: { [PROBE_TOKEN_SECRET]: PROBE_TOKEN } });
     expect(run.code, run.all).toBe(EXIT_OK);
     expect(run.record?.args).not.toContain("--secrets-file");
@@ -673,8 +673,8 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
         env: { PATH: process.env["PATH"], HOME: dir, WRANGLER_SEND_METRICS: "false", REAL_WRANGLER: bin, [PROBE_TOKEN_SECRET]: PROBE_TOKEN },
       });
       expect(run.code, run.all).toBe(EXIT_OK);
-      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.DATA_API \(musubi-production-data-api\)\s+Worker/));
-      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.MUSUBI_PROBE_TOKEN \("\(hidden\)"\)\s+Environment Variable/));
+      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.DATA_API \(musunest-production-data-api\)\s+Worker/));
+      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.MUSUNEST_PROBE_TOKEN \("\(hidden\)"\)\s+Environment Variable/));
       expectRedacted(run.all);
       expect(leftoverSecretDirs()).toEqual([]);
     },
@@ -917,7 +917,7 @@ describe("deploy-production.yml", () => {
     const preflight = steps[0] ?? { body: "" };
     const names = [...preflight.body.matchAll(/^\s+HAS_([A-Z0-9_]+):/gm)].map((m) => m[1] ?? "");
     expect(names.toSorted()).toEqual(
-      ["CLOUDFLARE_ACCOUNT_ID_PROD", "CLOUDFLARE_API_TOKEN_PROD", "MUSUBI_PROBE_TOKEN", "R2_ACCESS_KEY_ID", "R2_S3_ENDPOINT", "R2_SECRET_ACCESS_KEY", "SMOKE_BASE_URL"],
+      ["CLOUDFLARE_ACCOUNT_ID_PROD", "CLOUDFLARE_API_TOKEN_PROD", "MUSUNEST_PROBE_TOKEN", "R2_ACCESS_KEY_ID", "R2_S3_ENDPOINT", "R2_SECRET_ACCESS_KEY", "SMOKE_BASE_URL"],
     );
     for (const missing of names) {
       const env = Object.fromEntries(names.map((name) => [`HAS_${name}`, name === missing ? "false" : "true"]));
@@ -962,7 +962,7 @@ describe("deploy-production.yml", () => {
       expect(step.body).not.toMatch(/(?:^|\s)wrangler\s/m);
       expect(step.body).not.toContain("--base-url");
       expect(step.body).not.toContain("--secrets-file");
-      expect(step.body).not.toMatch(/\$\{?(?:MUSUBI_PROBE_TOKEN|SMOKE_PROBE_TOKEN)\b/);
+      expect(step.body).not.toMatch(/\$\{?(?:MUSUNEST_PROBE_TOKEN|SMOKE_PROBE_TOKEN)\b/);
     }
   });
 
@@ -1004,15 +1004,15 @@ describe("deploy-production.yml", () => {
     expect(drift).not.toContain("CLOUDFLARE_");
   });
 
-  it("MUSUBI_PROBE_TOKEN は、secret を載せる deploy（gateway・host）と smoke（SMOKE_PROBE_TOKEN として）にだけ渡す", () => {
+  it("MUSUNEST_PROBE_TOKEN は、secret を載せる deploy（gateway・host）と smoke（SMOKE_PROBE_TOKEN として）にだけ渡す", () => {
     const withToken: string[] = [];
     for (const step of steps) {
       const target = deployWorkerTarget(step);
       const deploysSecret = target !== undefined && secretsFor(target, "production").includes(PROBE_TOKEN_SECRET);
       const smoke = /pnpm smoke/.test(step.body);
-      expect(passes(step, "MUSUBI_PROBE_TOKEN"), step.body).toBe(deploysSecret || smoke);
-      expect(passesAs(step, "MUSUBI_PROBE_TOKEN", "MUSUBI_PROBE_TOKEN"), step.body).toBe(deploysSecret);
-      expect(passesAs(step, "SMOKE_PROBE_TOKEN", "MUSUBI_PROBE_TOKEN"), step.body).toBe(smoke);
+      expect(passes(step, "MUSUNEST_PROBE_TOKEN"), step.body).toBe(deploysSecret || smoke);
+      expect(passesAs(step, "MUSUNEST_PROBE_TOKEN", "MUSUNEST_PROBE_TOKEN"), step.body).toBe(deploysSecret);
+      expect(passesAs(step, "SMOKE_PROBE_TOKEN", "MUSUNEST_PROBE_TOKEN"), step.body).toBe(smoke);
       if (deploysSecret) withToken.push(target);
     }
     expect(withToken).toEqual(["gateway", "host"]);
@@ -1045,7 +1045,7 @@ describe("deploy-production.yml", () => {
 
 describe("production の資格情報に届くのは deploy-production.yml と rollback.yml だけ", () => {
   /** production 環境にだけ置く Secret（CLAUDE.md「資格情報の置き場所」）。SMOKE_BASE_URL は staging 環境にも同じ名前で置くので含めない */
-  const PRODUCTION_SECRETS = ["CLOUDFLARE_API_TOKEN_PROD", "CLOUDFLARE_ACCOUNT_ID_PROD", "MUSUBI_PROBE_TOKEN", "TF_CLOUDFLARE_API_TOKEN_PROD"];
+  const PRODUCTION_SECRETS = ["CLOUDFLARE_API_TOKEN_PROD", "CLOUDFLARE_ACCOUNT_ID_PROD", "MUSUNEST_PROBE_TOKEN", "TF_CLOUDFLARE_API_TOKEN_PROD"];
   /** production 環境を宣言してよいワークフロー。どちらも v* タグからしか動けず、必須レビュワーの承認が要る（04 §5・§6.1） */
   const PRODUCTION_WORKFLOWS = ["deploy-production.yml", "rollback.yml"];
   const files = readdirSync(join(ROOT, ".github/workflows")).filter((file) => /\.ya?ml$/.test(file));
@@ -1108,7 +1108,7 @@ function nth<T>(items: readonly T[], index: number): T {
 function workerVersions(currentIndex: Partial<Record<WorkerTarget, number>>, releases: readonly Release[] = RELEASES): WorkerVersions[] {
   return SWITCH_ORDER.forward.map((target, w) => {
     const versions: VersionDetail[] = releases.map((r, i) => ({ id: versionId(w, i), createdOn: r.at, gitSha: r.sha }));
-    return { target, name: `musubi-production-${target}`, current: nth(versions, currentIndex[target] ?? releases.length - 1), versions };
+    return { target, name: `musunest-production-${target}`, current: nth(versions, currentIndex[target] ?? releases.length - 1), versions };
   });
 }
 
@@ -1196,7 +1196,7 @@ describe("巻き戻し：版の JSON を読む", () => {
       view([
         { name: "ENVIRONMENT", type: "plain_text", text: "production" },
         { name: "GIT_SHA", type: "plain_text", text: SHA_OLD.toUpperCase() },
-        { name: "MUSUBI_PROBE_TOKEN", type: "secret_text" },
+        { name: "MUSUNEST_PROBE_TOKEN", type: "secret_text" },
       ]),
     );
     expect(detail).toEqual({ id, createdOn: "2026-09-14T14:25:00.000000Z", gitSha: SHA_OLD });
@@ -1288,14 +1288,14 @@ describe("巻き戻し：切り替え先と順を決める（planRollback）", (
 });
 
 describe("巻き戻し：wrangler の呼び方", () => {
-  it.each(ENVS)("Worker の名前は wrangler.jsonc の env.%s.name（musubi-<env>-<Worker>）", (env) => {
+  it.each(ENVS)("Worker の名前は wrangler.jsonc の env.%s.name（musunest-<env>-<Worker>）", (env) => {
     for (const target of SWITCH_ORDER.forward) {
-      expect(workerName(ROOT, target, env)).toBe(`musubi-${env}-${target}`);
+      expect(workerName(ROOT, target, env)).toBe(`musunest-${env}-${target}`);
     }
   });
 
   it("版を読む呼び方は --name と --json。設定の無い一時ディレクトリで動かし、secret は載せない", () => {
-    const name = "musubi-production-host";
+    const name = "musunest-production-host";
     const id = versionId(2, 0);
     expect(readCall.status(name)).toEqual({ kind: "read", cwd: null, args: ["deployments", "status", "--name", name, "--json"], secrets: [] });
     expect(readCall.list(name)).toEqual({ kind: "read", cwd: null, args: ["versions", "list", "--name", name, "--json"], secrets: [] });
@@ -1303,15 +1303,15 @@ describe("巻き戻し：wrangler の呼び方", () => {
   });
 
   it("切り替える呼び方は wrangler rollback <版> --name --message --yes。message は 120 文字以内", () => {
-    const call = rollbackCall("musubi-production-host", versionId(2, 0), SHA_OLD);
+    const call = rollbackCall("musunest-production-host", versionId(2, 0), SHA_OLD);
     expect(call).toEqual({
       kind: "rollback",
       cwd: null,
-      args: ["rollback", versionId(2, 0), "--name", "musubi-production-host", "--message", `${ROLLBACK_MESSAGE} ${SHA_OLD}`, "--yes"],
+      args: ["rollback", versionId(2, 0), "--name", "musunest-production-host", "--message", `${ROLLBACK_MESSAGE} ${SHA_OLD}`, "--yes"],
       secrets: [],
     });
     expect(`${ROLLBACK_MESSAGE} ${SHA_OLD}`.length).toBeLessThanOrEqual(120);
-    expect(() => rollbackCall("musubi-production-host", "--help", SHA_OLD)).toThrow("版の ID の形でない");
+    expect(() => rollbackCall("musunest-production-host", "--help", SHA_OLD)).toThrow("版の ID の形でない");
   });
 
   it("要約：rollback は切り替え前後の版・既定値で進めたこと・切り替えた結果を出す", () => {
@@ -1336,7 +1336,7 @@ describe("巻き戻し：wrangler の呼び方", () => {
   it("要約：secret が変わった版へ戻すときは、変わった secret の名前（値ではない）も出す", () => {
     const text = [
       `? The following secrets have changed since version ${versionId(2, 0)} was deployed. Please confirm you wish to continue with the rollback`,
-      "  * MUSUBI_PROBE_TOKEN",
+      "  * MUSUNEST_PROBE_TOKEN",
       "🤖 Using fallback value in non-interactive context: yes",
     ].join("\n");
     expect(summarize("rollback", text)).toEqual(text.split("\n"));
@@ -1374,7 +1374,7 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
         "const { FAKE_STATE, FAKE_CALLS } = process.env;",
         "const state = JSON.parse(readFileSync(FAKE_STATE, 'utf8'));",
         "const args = process.argv.slice(2);",
-        "appendFileSync(FAKE_CALLS, JSON.stringify({ args, cwd: process.cwd(), probeTokenEnv: process.env.MUSUBI_PROBE_TOKEN, forceColor: process.env.FORCE_COLOR }) + '\\n');",
+        "appendFileSync(FAKE_CALLS, JSON.stringify({ args, cwd: process.cwd(), probeTokenEnv: process.env.MUSUNEST_PROBE_TOKEN, forceColor: process.env.FORCE_COLOR }) + '\\n');",
         "const name = args[args.indexOf('--name') + 1];",
         "const worker = state.workers[name];",
         "if (worker === undefined) { process.stderr.write(`✘ [ERROR] A request to the Cloudflare API (/accounts/${state.accountId}/workers/scripts/${name}) failed.\\n`); process.exit(1); }",
@@ -1387,7 +1387,7 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
         "  json(worker.versions.map(meta));",
         "} else if (args[0] === 'versions' && args[1] === 'view') {",
         "  const v = worker.versions.find((x) => x.id === args[2]);",
-        "  const bindings = [{ name: 'ENVIRONMENT', type: 'plain_text', text: 'production' }, ...(v.sha ? [{ name: 'GIT_SHA', type: 'plain_text', text: v.sha }] : []), { name: 'MUSUBI_PROBE_TOKEN', type: 'secret_text' }];",
+        "  const bindings = [{ name: 'ENVIRONMENT', type: 'plain_text', text: 'production' }, ...(v.sha ? [{ name: 'GIT_SHA', type: 'plain_text', text: v.sha }] : []), { name: 'MUSUNEST_PROBE_TOKEN', type: 'secret_text' }];",
         "  json({ ...meta(v), resources: { script: { handlers: ['fetch'] }, script_runtime: { compatibility_date: '2026-09-01' }, bindings } });",
         "} else if (args[0] === 'rollback') {",
         "  if (state.failRollback === name) { process.stderr.write(state.failOutput); process.exit(1); }",
@@ -1420,14 +1420,14 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
       author: AUTHOR_EMAIL,
       rollbackOutput: rollbackOutput("{previous}", "{id}", "{message}"),
       failOutput: [
-        `✘ [ERROR] A request to the Cloudflare API (/accounts/${ACCOUNT_ID}/workers/scripts/musubi-production-gateway/deployments) failed.`,
-        `  Version was uploaded by ${AUTHOR_EMAIL} at https://musubi-production-gateway.${SUBDOMAIN}.workers.dev [code: 10000]`,
+        `✘ [ERROR] A request to the Cloudflare API (/accounts/${ACCOUNT_ID}/workers/scripts/musunest-production-gateway/deployments) failed.`,
+        `  Version was uploaded by ${AUTHOR_EMAIL} at https://musunest-production-gateway.${SUBDOMAIN}.workers.dev [code: 10000]`,
         "::error::injected by a response",
         "",
       ].join("\n"),
       workers: Object.fromEntries(
         SWITCH_ORDER.forward.map((target, w) => [
-          `musubi-production-${target}`,
+          `musunest-production-${target}`,
           {
             current: versionId(w, currentIndex[target] ?? RELEASES.length - 1),
             versions: RELEASES.map((r, i) => ({ id: versionId(w, i), created_on: r.at, sha: r.sha })),
@@ -1458,7 +1458,7 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
       .filter((line) => line !== "")
       .map((line) => JSON.parse(line) as Call);
     const after = JSON.parse(readFileSync(statePath, "utf8")) as FakeState;
-    const currents = Object.fromEntries(SWITCH_ORDER.forward.map((t) => [t, after.workers[`musubi-production-${t}`]?.current]));
+    const currents = Object.fromEntries(SWITCH_ORDER.forward.map((t) => [t, after.workers[`musunest-production-${t}`]?.current]));
     return { code: exit, out, err, all: [...out, ...err].join("\n"), calls, currents };
   }
 
@@ -1468,15 +1468,15 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
   it("1つ前へ戻す：版を読み、host → gateway → data-api の順に切り替え、1つずつ確かめて exit 0", async () => {
     const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}));
     expect(run.code, run.all).toBe(EXIT_OK);
-    expect(switched(run.calls)).toEqual(["musubi-production-host", "musubi-production-gateway", "musubi-production-data-api"]);
+    expect(switched(run.calls)).toEqual(["musunest-production-host", "musunest-production-gateway", "musunest-production-data-api"]);
     expect(run.currents).toEqual(allAt(0));
     for (const [w, target] of SWITCH_ORDER.forward.entries()) {
-      const call = run.calls.find((c) => c.args[0] === "rollback" && c.args[3] === `musubi-production-${target}`);
-      expect(call?.args).toEqual(rollbackCall(`musubi-production-${target}`, versionId(w, 0), SHA_OLD).args);
+      const call = run.calls.find((c) => c.args[0] === "rollback" && c.args[3] === `musunest-production-${target}`);
+      expect(call?.args).toEqual(rollbackCall(`musunest-production-${target}`, versionId(w, 0), SHA_OLD).args);
     }
     // 切り替えのたびに、今のデプロイを読み直す
     const afterFirstSwitch = run.calls.slice(run.calls.findIndex((c) => c.args[0] === "rollback") + 1)[0];
-    expect(afterFirstSwitch?.args).toEqual(readCall.status("musubi-production-host").args);
+    expect(afterFirstSwitch?.args).toEqual(readCall.status("musunest-production-host").args);
 
     expect(run.out).toContain("deploy-worker: 古い版へ戻す。順は host → gateway → data-api");
     expect(run.out).toContain(`  Current Version ID: ${versionId(2, 0)}`);
@@ -1506,7 +1506,7 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
   it("新しい版へ戻す（復帰）：data-api → gateway → host の順", async () => {
     const run = await rollback(["--env", "production", "--rollback-to", SHA_NEW], fakeState({ "data-api": 0, gateway: 0, host: 0 }));
     expect(run.code, run.all).toBe(EXIT_OK);
-    expect(switched(run.calls)).toEqual(["musubi-production-data-api", "musubi-production-gateway", "musubi-production-host"]);
+    expect(switched(run.calls)).toEqual(["musunest-production-data-api", "musunest-production-gateway", "musunest-production-host"]);
     expect(run.currents).toEqual(allAt(1));
     expect(run.out).toContain("deploy-worker: 新しい版へ進める。順は data-api → gateway → host");
   });
@@ -1521,7 +1521,7 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
   it("配っている途中で落ちた（host だけ OLD）：OLD へ戻すなら host を飛ばす", async () => {
     const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({ host: 0 }));
     expect(run.code, run.all).toBe(EXIT_OK);
-    expect(switched(run.calls)).toEqual(["musubi-production-gateway", "musubi-production-data-api"]);
+    expect(switched(run.calls)).toEqual(["musunest-production-gateway", "musunest-production-data-api"]);
     expect(run.out).toContain("deploy-worker: 古い版へ戻す。順は gateway → data-api（host は既に切り替え先の版なので飛ばす）");
   });
 
@@ -1536,12 +1536,12 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
   });
 
   it("途中で rollback が落ちたら止め、どこまで切り替えたかを出して exit 1。同じ --rollback-to でもう一度動かすと続きから切り替える", async () => {
-    const failed = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { failRollback: "musubi-production-gateway" }));
+    const failed = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { failRollback: "musunest-production-gateway" }));
     expect(failed.code).toBe(EXIT_NG);
-    expect(switched(failed.calls)).toEqual(["musubi-production-host", "musubi-production-gateway"]);
+    expect(switched(failed.calls)).toEqual(["musunest-production-host", "musunest-production-gateway"]);
     expect(failed.currents).toEqual({ "data-api": versionId(0, 1), gateway: versionId(1, 1), host: versionId(2, 0) });
     expect(failed.out).toContainEqual(expect.stringContaining("deploy-worker: 切り替え済み：host。未切り替え：gateway, data-api。"));
-    expect(failed.out).toContainEqual(expect.stringContaining(`/accounts/${REDACTED_ACCOUNT}/workers/scripts/musubi-production-gateway/deployments`));
+    expect(failed.out).toContainEqual(expect.stringContaining(`/accounts/${REDACTED_ACCOUNT}/workers/scripts/musunest-production-gateway/deployments`));
     expect(failed.err[0]).toBe("deploy-worker: gateway の rollback に失敗した（上の出力）");
     expectRedacted(failed.all);
     expectNoWorkflowCommand(failed.out);
@@ -1549,19 +1549,19 @@ describe("CLI：--rollback-to（偽の wrangler）", () => {
     // 続き：host は既に OLD なので飛ばし、gateway → data-api
     const resumed = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({ host: 0 }));
     expect(resumed.code, resumed.all).toBe(EXIT_OK);
-    expect(switched(resumed.calls)).toEqual(["musubi-production-gateway", "musubi-production-data-api"]);
+    expect(switched(resumed.calls)).toEqual(["musunest-production-gateway", "musunest-production-data-api"]);
   });
 
   it("rollback が exit 0 でも今のデプロイが切り替わっていなければ、止めて exit 1", async () => {
-    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { ignoreRollback: "musubi-production-host" }));
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { ignoreRollback: "musunest-production-host" }));
     expect(run.code).toBe(EXIT_NG);
-    expect(switched(run.calls)).toEqual(["musubi-production-host"]);
+    expect(switched(run.calls)).toEqual(["musunest-production-host"]);
     expect(run.err[0]).toContain("host: rollback の後も、今のデプロイが切り替え先の版を向いていない");
     expect(run.out).toContainEqual(expect.stringContaining("切り替え済み：なし。未切り替え：host, gateway, data-api。"));
   });
 
   it("版の JSON が読めなければ、中身を出さずに、何も切り替えずに exit 1", async () => {
-    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { brokenStatus: "musubi-production-data-api" }));
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { brokenStatus: "musunest-production-data-api" }));
     expect(run.code).toBe(EXIT_NG);
     expect(switched(run.calls)).toEqual([]);
     expect(run.err[0]).toContain("wrangler deployments status --json の出力が JSON として読めない");
@@ -1654,7 +1654,7 @@ describe("rollback.yml", () => {
   it("前提の確認：Secret が1つでも空なら、名前を挙げて落とす（値は受け取らない）", () => {
     const preflight = steps[0] ?? { body: "" };
     const names = [...preflight.body.matchAll(/^\s+HAS_([A-Z0-9_]+):/gm)].map((m) => m[1] ?? "");
-    expect(names.toSorted()).toEqual(["CLOUDFLARE_ACCOUNT_ID_PROD", "CLOUDFLARE_API_TOKEN_PROD", "MUSUBI_PROBE_TOKEN", "SMOKE_BASE_URL"]);
+    expect(names.toSorted()).toEqual(["CLOUDFLARE_ACCOUNT_ID_PROD", "CLOUDFLARE_API_TOKEN_PROD", "MUSUNEST_PROBE_TOKEN", "SMOKE_BASE_URL"]);
     for (const missing of names) {
       const env = Object.fromEntries(names.map((name) => [`HAS_${name}`, name === missing ? "false" : "true"]));
       const run = runPreflight(preflight, { ...env, REF: "refs/tags/v0.1.1", TO: "v0.1.0" });
@@ -1753,7 +1753,7 @@ describe("rollback.yml", () => {
       expect(step.body).not.toMatch(/(?:^|\s)wrangler\s/m);
       expect(step.body).not.toContain("--base-url");
       expect(step.body).not.toContain("--secrets-file");
-      expect(runOf(step)).not.toMatch(/\$\{?(?:MUSUBI_PROBE_TOKEN|SMOKE_PROBE_TOKEN|CLOUDFLARE_API_TOKEN)\b/);
+      expect(runOf(step)).not.toMatch(/\$\{?(?:MUSUNEST_PROBE_TOKEN|SMOKE_PROBE_TOKEN|CLOUDFLARE_API_TOKEN)\b/);
     }
   });
 
@@ -1767,12 +1767,12 @@ describe("rollback.yml", () => {
     }
   });
 
-  it("MUSUBI_PROBE_TOKEN は smoke に SMOKE_PROBE_TOKEN としてだけ渡す（Worker に載せない）。SMOKE_BASE_URL も smoke だけ", () => {
+  it("MUSUNEST_PROBE_TOKEN は smoke に SMOKE_PROBE_TOKEN としてだけ渡す（Worker に載せない）。SMOKE_BASE_URL も smoke だけ", () => {
     for (const step of steps) {
       const smoke = /pnpm smoke/.test(step.body);
-      expect(passes(step, "MUSUBI_PROBE_TOKEN"), step.body).toBe(smoke);
-      expect(passesAs(step, "SMOKE_PROBE_TOKEN", "MUSUBI_PROBE_TOKEN"), step.body).toBe(smoke);
-      expect(passesAs(step, "MUSUBI_PROBE_TOKEN", "MUSUBI_PROBE_TOKEN"), step.body).toBe(false);
+      expect(passes(step, "MUSUNEST_PROBE_TOKEN"), step.body).toBe(smoke);
+      expect(passesAs(step, "SMOKE_PROBE_TOKEN", "MUSUNEST_PROBE_TOKEN"), step.body).toBe(smoke);
+      expect(passesAs(step, "MUSUNEST_PROBE_TOKEN", "MUSUNEST_PROBE_TOKEN"), step.body).toBe(false);
       expect(passes(step, "SMOKE_BASE_URL"), step.body).toBe(smoke);
     }
   });
@@ -1800,7 +1800,7 @@ describe("rollback.yml", () => {
 describe("--smoke：dev の宛先を組み立てて smoke に渡す（偽の fetch）", () => {
   /** 目印。CI 用トークンの代わり */
   const API_TOKEN = "fixture-ci-token-2f7c9e1b";
-  const HOSTNAME = `musubi-dev-host.${SUBDOMAIN}.workers.dev`;
+  const HOSTNAME = `musunest-dev-host.${SUBDOMAIN}.workers.dev`;
   const SUBDOMAIN_API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID_HEX}/workers/subdomain`;
   const FAST: RetryPolicy = { maxAttempts: 3, retryIntervalMs: 10, requestTimeoutMs: 1_000, deadlineMs: 10_000 };
   const CREDENTIALS = { CLOUDFLARE_API_TOKEN: API_TOKEN, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID_HEX, CLOUDFLARE_ACCOUNT_ID_PROD: "1a2b3c4d5e6f708192a3b4c5d6e7f809" };
@@ -1871,7 +1871,7 @@ describe("--smoke：dev の宛先を組み立てて smoke に渡す（偽の fet
     for (const secret of [API_TOKEN, HOSTNAME, "https://", "fixture-wrong-origin"]) expect(run.all).not.toContain(secret);
   }
 
-  it("--smoke で組み立ててよい env は dev だけ。dev の host は X-Musubi-Probe が無くても詳細を返す", () => {
+  it("--smoke で組み立ててよい env は dev だけ。dev の host は X-Musunest-Probe が無くても詳細を返す", () => {
     expect(SMOKE_ENVS).toEqual(["dev"]);
     for (const env of SMOKE_ENVS) expect(PROBE_REQUIRED_ENVS).not.toContain(env);
   });
@@ -1900,7 +1900,7 @@ describe("--smoke：dev の宛先を組み立てて smoke に渡す（偽の fet
     expect(run.code, run.all).toBe(EXIT_OK);
     expect(run.urls).toEqual([SUBDOMAIN_API, `https://${HOSTNAME}/healthz`]);
     expect(run.healthzHeaders[0]?.get(PROBE_HEADER)).toBeNull();
-    expect(run.out[0]).toBe("deploy-worker: smoke（env=dev）: 宛先は host（musubi-dev-host）の workers.dev のオリジン。Cloudflare の API で読んだサブドメインから組み立て、表示しない");
+    expect(run.out[0]).toBe("deploy-worker: smoke（env=dev）: 宛先は host（musunest-dev-host）の workers.dev のオリジン。Cloudflare の API で読んだサブドメインから組み立て、表示しない");
     expect(run.out).toContain(`smoke: GET /healthz（env=dev, expect-sha=${SHA}）`);
     expect(run.out).toContainEqual(expect.stringMatching(/^smoke: OK {2}host → gateway → data_api → d1 \/ r2 \/ do/));
     expect(run.out.at(-1)).toBe("deploy-worker: OK  smoke（env=dev）");
@@ -1983,7 +1983,7 @@ describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の ter
     CLOUDFLARE_API_TOKEN: "fixture-ci-token-3b7a9f",
     TF_CLOUDFLARE_API_TOKEN_PROD: "fixture-tf-prod-token-5e2c",
     CLOUDFLARE_API_TOKEN_PROD: "fixture-ci-prod-token-9a4b",
-    MUSUBI_PROBE_TOKEN_PROD: PROBE_TOKEN,
+    MUSUNEST_PROBE_TOKEN_PROD: PROBE_TOKEN,
     R2_ACCESS_KEY_ID: "fixture-r2-key-6d0e2a",
     R2_SECRET_ACCESS_KEY: "fixture-r2-secret-1f8b3c",
     R2_S3_ENDPOINT: `https://${ACCOUNT_ID_HEX}.r2.cloudflarestorage.com`,
@@ -1991,9 +1991,9 @@ describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の ter
   };
   /** 手元のシェルに残っていそうな値。どの段にも届かないはず */
   const STRAY_ENV: Readonly<Record<string, string>> = {
-    MUSUBI_PROBE_TOKEN: "fixture-stray-probe-token-47d1",
+    MUSUNEST_PROBE_TOKEN: "fixture-stray-probe-token-47d1",
     SMOKE_PROBE_TOKEN: "fixture-stray-smoke-token-8b2e",
-    SMOKE_BASE_URL: `https://musubi-production-host.${SUBDOMAIN}.workers.dev`,
+    SMOKE_BASE_URL: `https://musunest-production-host.${SUBDOMAIN}.workers.dev`,
     AWS_SESSION_TOKEN: "fixture-stray-aws-session-3c9f",
     CLOUDFLARE_ENV: "production",
     TF_VAR_account_id_prod: PROD_ACCOUNT_HEX,
@@ -2028,7 +2028,7 @@ describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の ter
       "#!/usr/bin/env node",
       'const { appendFileSync } = require("node:fs");',
       "const args = process.argv.slice(2);",
-      "const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('FAKE_') && /TOKEN|SECRET|ACCOUNT|^AWS_|^TF_VAR_|^R2_|^SMOKE_|^MUSUBI_|^CLOUDFLARE_/.test(k)));",
+      "const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('FAKE_') && /TOKEN|SECRET|ACCOUNT|^AWS_|^TF_VAR_|^R2_|^SMOKE_|^MUSUNEST_|^CLOUDFLARE_/.test(k)));",
       "appendFileSync(process.env.FAKE_RECORD, JSON.stringify({ cmd: require('node:path').basename(process.argv[1]), args, env }) + '\\n');",
       "const out = (s) => process.stdout.write(s + '\\n');",
       "const { FAKE_ACCOUNT: ACC, FAKE_SUB: SUB } = process.env;",
@@ -2044,7 +2044,7 @@ describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の ter
         "if (sub === 'apply') { out(`module.env.cloudflare_queue.build: Creation complete after 1s [id=${ACC}]`); out('Apply complete! Resources: 5 added, 0 changed, 0 destroyed.'); }",
         "if (sub === 'plan' && process.env.FAKE_PLAN_EXIT === '2') { out('  # module.env.cloudflare_d1_database.control will be updated in-place'); out(`      account_id = \"${ACC}\"`); out('Plan: 0 to add, 1 to change, 0 to destroy.'); process.exitCode = 2; }",
         "else if (sub === 'plan') { out('No changes. Your infrastructure matches the configuration.'); }",
-        "if (process.env.FAKE_TF_FAIL === sub) { process.stderr.write(`Error: deleting /accounts/${ACC}/d1/database failed; see https://musubi-dev-host.${SUB}.workers.dev\\n`); process.exitCode = 1; }",
+        "if (process.env.FAKE_TF_FAIL === sub) { process.stderr.write(`Error: deleting /accounts/${ACC}/d1/database failed; see https://musunest-dev-host.${SUB}.workers.dev\\n`); process.exitCode = 1; }",
       ].join("\n"),
       { mode: 0o755 },
     );
@@ -2052,9 +2052,9 @@ describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の ter
       join(bin, "pnpm"),
       [
         ...record,
-        "if (args[0] === 'build') { out(`> musubi@ build ${process.cwd()}`); out(' Tasks:    11 successful, 11 total'); out('Cached:    9 cached, 11 total'); out('  Time:    5.778s'); }",
+        "if (args[0] === 'build') { out(`> musunest@ build ${process.cwd()}`); out(' Tasks:    11 successful, 11 total'); out('Cached:    9 cached, 11 total'); out('  Time:    5.778s'); }",
         "else { out(`fake: ${args.slice(2).join(' ')}`); }",
-        "if (process.env.FAKE_PNPM_FAIL && args.join(' ').includes(process.env.FAKE_PNPM_FAIL)) { process.stderr.write(`fake failure at https://musubi-dev-host.${SUB}.workers.dev\\n`); process.exitCode = 1; }",
+        "if (process.env.FAKE_PNPM_FAIL && args.join(' ').includes(process.env.FAKE_PNPM_FAIL)) { process.stderr.write(`fake failure at https://musunest-dev-host.${SUB}.workers.dev\\n`); process.exitCode = 1; }",
       ].join("\n"),
       { mode: 0o755 },
     );
@@ -2148,7 +2148,7 @@ describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の ter
     expect(run.stdout).toContain("  apply の後の plan: No changes（exit 0）");
     expect(run.stdout).toContain("   Tasks:    11 successful, 11 total");
     expect(run.stdout).not.toContain("Successfully configured the backend");
-    expect(run.stdout).not.toContain("> musubi@ build");
+    expect(run.stdout).not.toContain("> musunest@ build");
     expect(run.stdout.trimEnd().split("\n").at(-1)).toBe(`reproduce-dev: OK  dev を消して作り直し、貫通スモークが通った（commit ${HEAD}）`);
     expectNothingSecret(run);
   });

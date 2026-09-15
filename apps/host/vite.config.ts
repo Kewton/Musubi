@@ -2,7 +2,7 @@
 //
 // 出力は3つで、配るのは上の2つだけ（.wrangler/deploy/config.json が指すのは entry Worker で、prerender Worker は含まれない）。
 //   dist/client           … SPAシェル（index.html）と JS / CSS。wrangler.jsonc の assets として Static Assets が返す
-//   dist/musubi_<env>_host … entry Worker（src/worker/index.ts）。/api/* と /healthz だけを見る薄い Worker
+//   dist/musunest_<env>_host … entry Worker（src/worker/index.ts）。/api/* と /healthz だけを見る薄い Worker
 //   dist/server           … prerender Worker。**ビルド中にシェルを1枚描くためだけに使い、配らない**
 //
 // なぜ Worker を2つに分けるか：TanStack Start の SPAモードも、シェルはサーバー側の描画（server-entry）で作る。
@@ -20,7 +20,7 @@ import { defineConfig } from "vite";
 const ENVS = ["dev", "staging", "production"] as const;
 
 // env はビルド時に決まる（vite-plugin は CLOUDFLARE_ENV で wrangler.jsonc の env.<env> を解決する）。
-// 未指定のまま作ると env を持たない出力になり、`wrangler deploy --env staging` がトップレベル（musubi-dev-host）を
+// 未指定のまま作ると env を持たない出力になり、`wrangler deploy --env staging` がトップレベル（musunest-dev-host）を
 // 黙って配ってしまう。だから未指定は dev に固定し、別の env へ配ろうとしたら wrangler に食い違いで落とさせる。
 process.env.CLOUDFLARE_ENV ??= "dev";
 if (!(ENVS as readonly string[]).includes(process.env.CLOUDFLARE_ENV)) {
@@ -34,7 +34,7 @@ export default defineConfig({
         prerenderWorker: {
           // binding を持たない。シェルの描画に要らず、Terraform 由来の値もここには来ない。
           config: {
-            name: "musubi-host-prerender",
+            name: "musunest-host-prerender",
             main: "@tanstack/react-start/server-entry",
             compatibility_flags: ["nodejs_compat"],
             // server-entry はこれを見て、X-TSS_SHELL の付いた要求をシェル（ルートの中身を描かない）として描く。

@@ -4,7 +4,7 @@
 // runtime（src/index.ts）から切り離してあるのは、workerd の外——テスト・設定検査・
 // 将来の data-api 側の型——からも同じ定数を参照できるようにするためである。
 
-export const PACKAGE_NAME = "@musubi/app-do" as const;
+export const PACKAGE_NAME = "@musunest/app-do" as const;
 
 /** wrangler.jsonc の durable_objects.bindings[].class_name と migrations の正本。 */
 export const APP_INSTANCE_DO_CLASS_NAME = "AppInstanceDO" as const;

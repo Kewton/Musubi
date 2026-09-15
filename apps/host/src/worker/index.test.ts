@@ -9,7 +9,7 @@
 //      - / と深いリンクが同じ SPAシェルを返し、/healthz が Service Binding 越しに gateway → data-api → {D1, R2, DO} まで届く
 //   4. Worker を「呼ばれたら目印を返す」罠に差し替えても、ページロードは SPAシェルが返る＝**Static Assets が Worker を起動せずに返している**。
 //      罠に掛かるのは run_worker_first の2つだけ
-//   5. production のビルドの出力では、/healthz の詳細を X-Musubi-Probe が secret と一致したときだけ返す（Issue #55）。
+//   5. production のビルドの出力では、/healthz の詳細を X-Musunest-Probe が secret と一致したときだけ返す（Issue #55）。
 //      ヘッダ無し・誤った値・正しい値の3通りと、host と gateway の secret が食い違う・secret を置いていない production を workerd 上で確かめる
 //
 // モックにしないのは gateway と同じ理由：Service Binding が結線されていること、Static Assets の経路が設定どおりであることの
@@ -64,7 +64,7 @@ const readConfig = (path: string, env?: string) =>
 /** 描画のコードに固有の識別子。SSR の描画（React）と TanStack Start のサーバーがバンドルに入っていれば、どちらかが残る */
 const RENDERER_MARKERS = ["renderToReadableStream", "createStartHandler"] as const;
 /** ルートの中身（src/app/routes/index.tsx）。シェルに入っていれば、そのページを SSR で描いたことになる */
-const ROUTE_CONTENT = "<h1>Musubi</h1>";
+const ROUTE_CONTENT = "<h1>MUSUNEST</h1>";
 /** Worker を差し替える罠。Worker が呼ばれたら必ずこの本文を 418 で返す（Static Assets も workerd も返さない組み合わせ） */
 const TRIPWIRE = "host worker was invoked";
 /** ブラウザのページ遷移が付けるヘッダ。Static Assets はこれで「ナビゲーション」を見分ける */
@@ -72,7 +72,7 @@ const NAVIGATION = { "sec-fetch-mode": "navigate", accept: "text/html" } as cons
 
 describe("host パッケージ", () => {
   it("パッケージ名が正本の名前と一致する", () => {
-    expect(PACKAGE_NAME).toBe("@musubi/host");
+    expect(PACKAGE_NAME).toBe("@musunest/host");
   });
 });
 
@@ -80,12 +80,12 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
   const config = readConfig(CONFIG_PATH, env);
   const gateway = readConfig(GATEWAY_CONFIG_PATH, env);
 
-  it("Worker 名が musubi-<env>-host", () => {
-    expect(config.name).toBe(`musubi-${env}-host`);
+  it("Worker 名が musunest-<env>-host", () => {
+    expect(config.name).toBe(`musunest-${env}-host`);
   });
 
   it("Service Binding は GATEWAY の1本だけで、同じ env の gateway を指す", () => {
-    expect(gateway.name).toBe(`musubi-${env}-gateway`);
+    expect(gateway.name).toBe(`musunest-${env}-gateway`);
     expect(config.services).toEqual([{ binding: GATEWAY_BINDING, service: gateway.name }]);
   });
 
@@ -113,7 +113,7 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
     expect(gateway.vars).toMatchObject({ HEALTHZ_DETAIL: DETAIL[env] });
   });
 
-  it("MUSUBI_PROBE_TOKEN を vars に書かない（wrangler secret。リポジトリに値を置かない）", () => {
+  it("MUSUNEST_PROBE_TOKEN を vars に書かない（wrangler secret。リポジトリに値を置かない）", () => {
     expect(Object.keys(config.vars)).not.toContain(PROBE_TOKEN_SECRET);
   });
 
@@ -192,10 +192,10 @@ describe.each(ENVS)("vite build の出力（env.%s）", (env) => {
 
     const config = JSON.parse(readFileSync(workerConfigPath, "utf8")) as Record<string, unknown>;
     expect(config).toMatchObject({
-      name: `musubi-${env}-host`,
+      name: `musunest-${env}-host`,
       // ビルドした env が刻まれる。wrangler deploy --env <別の env> はこれと食い違って失敗する
       targetEnvironment: env,
-      services: [{ binding: GATEWAY_BINDING, service: `musubi-${env}-gateway` }],
+      services: [{ binding: GATEWAY_BINDING, service: `musunest-${env}-gateway` }],
       assets: { not_found_handling: "single-page-application", run_worker_first: [...WORKER_ROUTES] },
       // 詳細を隠すかどうかはビルドした env の vars で決まる。secret はビルドの出力にも入らない
       vars: { ENVIRONMENT: env, HEALTHZ_DETAIL: DETAIL[env] },
@@ -206,7 +206,7 @@ describe.each(ENVS)("vite build の出力（env.%s）", (env) => {
   it("SPAシェル（dist/client/index.html）はシェルだけで、ルートの中身を描いていない（SSR にしない）", () => {
     const html = readFileSync(join(buildOf(env).dist, "client/index.html"), "utf8");
     expect(html).toMatch(/^<!DOCTYPE html><html lang="ja">/);
-    expect(html).toContain("<title>Musubi</title>");
+    expect(html).toContain("<title>MUSUNEST</title>");
     expect(html).toMatch(/<script type="module" async="" src="\/assets\/[^"]+\.js"><\/script>/);
     expect(html).not.toContain(ROUTE_CONTENT);
   });
@@ -233,7 +233,7 @@ describe("生成物", () => {
 
 describe.each(ENVS)("host → gateway → data-api（env.%s・workerd 上の実機）", (env) => {
   let server: TestHarness;
-  // production は詳細を X-Musubi-Probe 付きのときだけ返す。dev / staging は secret もヘッダも無しで今の応答を返す
+  // production は詳細を X-Musunest-Probe 付きのときだけ返す。dev / staging は secret もヘッダも無しで今の応答を返す
   const probe = DETAIL[env] === "probe";
   const secret = probe ? { [PROBE_TOKEN_SECRET]: PROBE_TOKEN } : {};
 
@@ -345,9 +345,9 @@ async function expectHidden(res: HarnessResponse, status: 200 | 503): Promise<vo
   }
 }
 
-describe("production の /healthz は X-Musubi-Probe が正しいときだけ詳細を返す（workerd 上の実機・Issue #55 の受入試験）", () => {
+describe("production の /healthz は X-Musunest-Probe が正しいときだけ詳細を返す（workerd 上の実機・Issue #55 の受入試験）", () => {
   // production のビルドの出力（HEALTHZ_DETAIL=probe）と production の gateway・data-api を並べ、secret だけテスト用の値を渡す。
-  // 正しい値で gateway まで ok になることは、host が gateway を呼ぶときに X-Musubi-Probe を載せていることの証明も兼ねる
+  // 正しい値で gateway まで ok になることは、host が gateway を呼ぶときに X-Musunest-Probe を載せていることの証明も兼ねる
   // （gateway も production では詳細を隠すので、載せていなければ gateway が "ng: details hidden" になる）。
   let server: TestHarness;
 
@@ -386,7 +386,7 @@ describe("production の /healthz は X-Musubi-Probe が正しいときだけ詳
     });
   });
 
-  it("ページロードと /api/* は X-Musubi-Probe と関係なく今の応答のまま", async () => {
+  it("ページロードと /api/* は X-Musunest-Probe と関係なく今の応答のまま", async () => {
     const html = readFileSync(join(buildOf("production").dist, "client/index.html"), "utf8");
     expect(await (await server.fetch("/")).text()).toBe(html);
     const api = await server.fetch("/api/communities", { headers: { accept: "application/json", [PROBE_HEADER]: PROBE_TOKEN } });
@@ -396,7 +396,7 @@ describe("production の /healthz は X-Musubi-Probe が正しいときだけ詳
 });
 
 describe("production で host と gateway の secret が食い違うとき（workerd 上の実機）", () => {
-  // host が載せた X-Musubi-Probe を gateway が受け付けず、gateway が詳細を隠す。host はそれを ng として 503 にする。
+  // host が載せた X-Musunest-Probe を gateway が受け付けず、gateway が詳細を隠す。host はそれを ng として 503 にする。
   let server: TestHarness;
 
   beforeAll(async () => {

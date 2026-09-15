@@ -1,9 +1,9 @@
 {
-  "name": "@musubi/sdk",
+  "name": "@musunest/sdk",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "@musubi/sdk — データ・通知への唯一の扉",
+  "description": "@musunest/sdk — データ・通知への唯一の扉",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -19,6 +19,6 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@musubi/appspec-schema": "workspace:*"
+    "@musunest/appspec-schema": "workspace:*"
   }
 }

@@ -1,5 +1,5 @@
 {
-  "name": "@musubi/host",
+  "name": "@musunest/host",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,7 +12,7 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@musubi/sdk": "workspace:*",
+    "@musunest/sdk": "workspace:*",
     "@tanstack/react-router": "^1.170.36",
     "@tanstack/react-start": "^1.168.53",
     "react": "^19.3.0",

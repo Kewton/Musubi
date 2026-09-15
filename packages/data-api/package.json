@@ -1,5 +1,5 @@
 {
-  "name": "@musubi/data-api",
+  "name": "@musunest/data-api",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -20,9 +20,9 @@
     "deploy": "wrangler deploy"
   },
   "dependencies": {
-    "@musubi/appspec-schema": "workspace:*",
-    "@musubi/sdk": "workspace:*",
-    "@musubi/spec-engine": "workspace:*",
-    "@musubi/app-do": "workspace:*"
+    "@musunest/appspec-schema": "workspace:*",
+    "@musunest/sdk": "workspace:*",
+    "@musunest/spec-engine": "workspace:*",
+    "@musunest/app-do": "workspace:*"
   }
 }

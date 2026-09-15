@@ -25,7 +25,7 @@
 #   terraform の backend・sync-bindings  … R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_S3_ENDPOINT（AWS_* として）
 #   deploy-worker（wrangler・--smoke）   … CLOUDFLARE_API_TOKEN（CI 用トークン）
 #   Cloudflare に触れる段               … CLOUDFLARE_ACCOUNT_ID（アカウント①）
-# production の資格情報（*_PROD・MUSUBI_PROBE_TOKEN・SMOKE_*）はどの段にも渡さない。
+# production の資格情報（*_PROD・MUSUNEST_PROBE_TOKEN・SMOKE_*）はどの段にも渡さない。
 # CLOUDFLARE_ACCOUNT_ID が CLOUDFLARE_ACCOUNT_ID_PROD と同じなら、何もせずに止める（empty-buckets と --smoke も同じ照合をする）。
 # 値は環境変数でだけ渡す（コマンド行に載せない。プロセスの一覧に出ない）。
 #
@@ -106,7 +106,7 @@ r2_endpoint="${R2_S3_ENDPOINT}"
 # 資格情報の形の変数を全部外す（.env に後から足された名前も含める）。段ごとに要るものだけを、コマンドの前の代入で渡す
 for name in $(compgen -v); do
   case "${name}" in
-    CLOUDFLARE_* | TF_CLOUDFLARE_* | TF_VAR_* | R2_* | AWS_* | SMOKE_* | MUSUBI_* | *_PROD | *TOKEN* | *SECRET*) unset "${name}" ;;
+    CLOUDFLARE_* | TF_CLOUDFLARE_* | TF_VAR_* | R2_* | AWS_* | SMOKE_* | MUSUNEST_* | *_PROD | *TOKEN* | *SECRET*) unset "${name}" ;;
   esac
 done
 

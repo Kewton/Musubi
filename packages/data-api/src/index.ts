@@ -4,7 +4,7 @@
 // workers_dev / preview_urls / routes はすべて切ってある（src/index.test.ts が設定を確かめる）。
 //
 // M0 で応答するのは GET /healthz だけ（03 §5 の貫通スモーク）。認証も権限もまだ入れない。
-import { AppInstanceDO } from "@musubi/app-do";
+import { AppInstanceDO } from "@musunest/app-do";
 import { cloudflareProbes } from "./cloudflare";
 import type { DataApiEnv } from "./cloudflare";
 import { HEALTHZ_PATH } from "./contract";

@@ -6,7 +6,7 @@
 //   4. 1回だけ・上限つき：ok なら1リクエストで終わる。再試行は伝播待ちで直り得る失敗だけで、回数と総時間の上限で止まる。
 //      既定の上限は、初回デプロイで workers.dev の経路ができるまでの 404 を待ちきる幅にしてある（Issue #16）
 //   5. 宛先の URL を出さない：出力とエラーのどこにも、宛先のホスト名・ポート・URL として渡した値が混ざらない
-//   6. X-Musubi-Probe（Issue #55）：SMOKE_PROBE_TOKEN をヘッダにだけ載せ、出力のどこにも出さない。
+//   6. X-Musunest-Probe（Issue #55）：SMOKE_PROBE_TOKEN をヘッダにだけ載せ、出力のどこにも出さない。
 //      --env production では必須で、無ければ判定を始めずに exit 1
 //   7. host・gateway・data-api を workerd 上で並べた実機（host の受入試験と同じ形）に CLI を向ける。
 //      production の設定（詳細を隠す host）でも、SMOKE_PROBE_TOKEN を載せて詳細を取れる
@@ -15,7 +15,7 @@
 // vite build はしない：ここで確かめたいのは応答の形と経路で、SPA シェルの中身ではない（ビルドの出力は host の受入試験が見る）。
 // だから Static Assets にはダミーの index.html を置き、run_worker_first は host の設定の値を使う。
 //
-// data-api は @musubi/app-do の dist を読む。`pnpm test` は turbo run test（^build を先に済ませる）の後にここを走らせる。
+// data-api は @musunest/app-do の dist を読む。`pnpm test` は turbo run test（^build を先に済ませる）の後にここを走らせる。
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -73,11 +73,11 @@ const HEALTHY: HostHealthz = {
 
 const DEV: Expectation = { env: "dev", sha: undefined };
 
-/** 試験用の X-Musubi-Probe の値。出力に混ざっていないかを文字列で探すので、他に現れない並びにしてある */
+/** 試験用の X-Musunest-Probe の値。出力に混ざっていないかを文字列で探すので、他に現れない並びにしてある */
 const PROBE_TOKEN = "smoke-probe-token-7c1e9a";
 
 /** SPA シェルの代わり。host の受入試験が見る本物と同じく、HTML 文書として始まる。 */
-const SHELL = '<!DOCTYPE html><html lang="ja"><head><title>Musubi</title></head><body><div id="root"></div></body></html>';
+const SHELL = '<!DOCTYPE html><html lang="ja"><head><title>MUSUNEST</title></head><body><div id="root"></div></body></html>';
 
 const response = (status: number, body: unknown, contentType = "application/json"): Observation => ({
   kind: "response",
@@ -213,7 +213,7 @@ describe("host の Worker の contract との一致", () => {
     expect(WORKER_ROUTES).toContain(HEALTHZ_PATH);
   });
 
-  it("X-Musubi-Probe のヘッダ名が host の PROBE_HEADER と一致する", () => {
+  it("X-Musunest-Probe のヘッダ名が host の PROBE_HEADER と一致する", () => {
     expect(PROBE_HEADER).toBe(HOST_PROBE_HEADER);
   });
 
@@ -291,14 +291,14 @@ describe("judge：どの層で切れたか", () => {
     const withProbe = judge(response(status, body), { ...DEV, probe: true });
     expect(withProbe).toMatchObject({ ok: false, layers: ["host"], retryable: false });
     expect(reasonOf(withProbe)).toBe(
-      `詳細が隠された応答（${shown} だけ）: X-Musubi-Probe が受け付けられなかった` +
-        "（SMOKE_PROBE_TOKEN と host の secret MUSUBI_PROBE_TOKEN が一致しているかを確かめる）",
+      `詳細が隠された応答（${shown} だけ）: X-Musunest-Probe が受け付けられなかった` +
+        "（SMOKE_PROBE_TOKEN と host の secret MUSUNEST_PROBE_TOKEN が一致しているかを確かめる）",
     );
 
     const withoutProbe = judge(response(status, body), DEV);
     expect(withoutProbe).toMatchObject({ ok: false, layers: ["host"], retryable: false });
     expect(reasonOf(withoutProbe)).toBe(
-      `詳細が隠された応答（${shown} だけ）: この host は X-Musubi-Probe が無いと詳細を返さない` +
+      `詳細が隠された応答（${shown} だけ）: この host は X-Musunest-Probe が無いと詳細を返さない` +
         "（SMOKE_PROBE_TOKEN を渡すか、host の vars.HEALTHZ_DETAIL を確かめる）",
     );
   });
@@ -611,7 +611,7 @@ describe("1回だけ・上限つき（定期ポーリングしない）", () => 
 
 describe("宛先の URL を出さない", () => {
   // 目印。出力やエラー文言に1つでも混ざったら「宛先を出した」と判定する
-  const MARKER = "musubi-smoke-marker-4e7b1d";
+  const MARKER = "musunest-smoke-marker-4e7b1d";
   const SECRET_ORIGIN = `https://${MARKER}.example.workers.dev`;
 
   it("fetch の例外文言（ホスト名を含む）を捨て、コードだけを出す", async () => {
@@ -708,10 +708,10 @@ describe("宛先の URL を出さない", () => {
   });
 });
 
-// ── 6. X-Musubi-Probe（SMOKE_PROBE_TOKEN）───────────────────────────────────
+// ── 6. X-Musunest-Probe（SMOKE_PROBE_TOKEN）───────────────────────────────────
 
-describe("X-Musubi-Probe（SMOKE_PROBE_TOKEN）", () => {
-  /** 受けたリクエストの X-Musubi-Probe を記録するローカルの HTTP サーバ */
+describe("X-Musunest-Probe（SMOKE_PROBE_TOKEN）", () => {
+  /** 受けたリクエストの X-Musunest-Probe を記録するローカルの HTTP サーバ */
   async function recording(status: number, body: unknown): Promise<LocalServer & { readonly probes: (string | undefined)[] }> {
     const probes: (string | undefined)[] = [];
     const server = await listen((req, res) => {
@@ -722,13 +722,13 @@ describe("X-Musubi-Probe（SMOKE_PROBE_TOKEN）", () => {
     return Object.assign(server, { probes });
   }
 
-  it("SMOKE_PROBE_TOKEN があれば X-Musubi-Probe にそのまま載せ、付けたことだけを出す（値は出さない）", async () => {
+  it("SMOKE_PROBE_TOKEN があれば X-Musunest-Probe にそのまま載せ、付けたことだけを出す（値は出さない）", async () => {
     const server = await recording(200, HEALTHY);
     try {
       const run = await smoke(["--env", "dev"], { env: { SMOKE_BASE_URL: server.origin, [PROBE_TOKEN_ENV]: PROBE_TOKEN } });
       expect(run.code).toBe(EXIT_OK);
       expect(server.probes).toEqual([PROBE_TOKEN]);
-      expect(run.out[0]).toBe("smoke: GET /healthz（env=dev, X-Musubi-Probe 付き）");
+      expect(run.out[0]).toBe("smoke: GET /healthz（env=dev, X-Musunest-Probe 付き）");
       expect(run.all).not.toContain(PROBE_TOKEN);
       expectNoDestination(run, server.origin);
     } finally {
@@ -763,7 +763,7 @@ describe("X-Musubi-Probe（SMOKE_PROBE_TOKEN）", () => {
       expect(server.count()).toBe(0);
       expect(run.out).toEqual([]);
       expect(run.err[0]).toBe(
-        "smoke: --env production では環境変数 SMOKE_PROBE_TOKEN が要る（この host は X-Musubi-Probe が無いと詳細を返さず、" +
+        "smoke: --env production では環境変数 SMOKE_PROBE_TOKEN が要る（この host は X-Musunest-Probe が無いと詳細を返さず、" +
           "env も version も確かめられない。CI では production 環境の Secret から渡す）。1回も叩かずに止める",
       );
     } finally {
@@ -817,8 +817,8 @@ describe("X-Musubi-Probe（SMOKE_PROBE_TOKEN）", () => {
       expect(run.code).toBe(EXIT_NG);
       expect(server.count()).toBe(1);
       expect(verdictLine(run)).toBe(
-        `smoke: NG [host] 詳細が隠された応答（${JSON.stringify(body)} だけ）: X-Musubi-Probe が受け付けられなかった` +
-          "（SMOKE_PROBE_TOKEN と host の secret MUSUBI_PROBE_TOKEN が一致しているかを確かめる）",
+        `smoke: NG [host] 詳細が隠された応答（${JSON.stringify(body)} だけ）: X-Musunest-Probe が受け付けられなかった` +
+          "（SMOKE_PROBE_TOKEN と host の secret MUSUNEST_PROBE_TOKEN が一致しているかを確かめる）",
       );
       expect(run.all).not.toContain(PROBE_TOKEN);
       expectNoDestination(run, server.origin);
@@ -1021,7 +1021,7 @@ describe("host → gateway → data-api（workerd 上の実機）", () => {
     });
   });
 
-  describe("production（X-Musubi-Probe が無いと詳細を返さない host）", () => {
+  describe("production（X-Musunest-Probe が無いと詳細を返さない host）", () => {
     // production の設定（HEALTHZ_DETAIL=probe）のまま、secret だけテスト用の値を host と gateway に渡す（Issue #55）
     const secret = { [PROBE_TOKEN_SECRET]: PROBE_TOKEN };
     const origin = useHarness(() => [
@@ -1042,7 +1042,7 @@ describe("host → gateway → data-api（workerd 上の実機）", () => {
       });
       expect(run.code).toBe(EXIT_OK);
       expect(run.requests).toBe(1);
-      expect(run.out[0]).toBe(`smoke: GET /healthz（env=production, expect-sha=${GIT_SHA}, X-Musubi-Probe 付き）`);
+      expect(run.out[0]).toBe(`smoke: GET /healthz（env=production, expect-sha=${GIT_SHA}, X-Musunest-Probe 付き）`);
       expect(run.out.slice(1, -1)).toEqual([
         "  OK  host      HTTP 200",
         "  OK  gateway",
@@ -1060,7 +1060,7 @@ describe("host → gateway → data-api（workerd 上の実機）", () => {
       const run = await smoke(["--env", "production"], { env: { SMOKE_BASE_URL: origin(), [PROBE_TOKEN_ENV]: `${PROBE_TOKEN}0` } });
       expect(run.code).toBe(EXIT_NG);
       expect(run.requests).toBe(1);
-      expect(verdictLine(run)).toContain('smoke: NG [host] 詳細が隠された応答（{"ok":true} だけ）: X-Musubi-Probe が受け付けられなかった');
+      expect(verdictLine(run)).toContain('smoke: NG [host] 詳細が隠された応答（{"ok":true} だけ）: X-Musunest-Probe が受け付けられなかった');
       expect(run.all).not.toContain(PROBE_TOKEN);
     });
 
@@ -1113,7 +1113,7 @@ describe("host → gateway → data-api（workerd 上の実機）", () => {
 });
 
 /**
- * `pnpm smoke` と同じく tsx でファイルを動かす。宛先は SMOKE_BASE_URL で、X-Musubi-Probe の値は extraEnv で渡す（CI と同じ）。
+ * `pnpm smoke` と同じく tsx でファイルを動かす。宛先は SMOKE_BASE_URL で、X-Musunest-Probe の値は extraEnv で渡す（CI と同じ）。
  * 手元の環境変数の SMOKE_* は持ち込まない（試験の結果が手元の設定で変わらないように）。
  */
 function runScript(

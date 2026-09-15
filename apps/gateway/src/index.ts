@@ -5,7 +5,7 @@
 // 設定は src/index.test.ts が env ごとに、import と型は src/.oxlintrc.json が lint で確かめる。
 //
 // M0 で応答するのは GET /healthz だけ（03 §5 の貫通スモーク）。data-api の healthz を中継し、自分の結果を足す。
-// production（vars.HEALTHZ_DETAIL が probe）では、X-Musubi-Probe が secret と一致しない限り詳細を隠す（03 §5「セキュリティ上の注意」）。
+// production（vars.HEALTHZ_DETAIL が probe）では、X-Musunest-Probe が secret と一致しない限り詳細を隠す（03 §5「セキュリティ上の注意」）。
 import { cloudflareDataApi, cloudflareProbe } from "./cloudflare";
 import type { GatewayEnv } from "./cloudflare";
 import { HEALTHZ_PATH, PROBE_HEADER } from "./contract";
