@@ -19,14 +19,20 @@
 `infra/scripts/dep-graph.mjs` が正本。`pnpm lint` が package.json と tsconfig references の
 両方を照合して機械強制する。**図を変えるときは dep-graph.mjs を直す。**
 
+`A → B` は「A は B に依存してよい」。ここに無い向きは落ちる（2026-09-16 に下の 3 本を足した。`workspace/mvp/m1/00-open-questions.md` Q14）。
+
 ```
-appspec-schema ← sdk ← data-api ← gateway ← host
-       ↑                  ↑
-   spec-engine         app-do
-       ↑
-  control-plane
+host          → sdk
+gateway       → data-api, control-plane
+data-api      → sdk, spec-engine, app-do, control-plane, appspec-schema
+control-plane → spec-engine, appspec-schema
+e2e           → sdk
+sdk・spec-engine・app-do・connector → appspec-schema
 ```
 
+- 足した 3 本：`data-api → control-plane`（D1 の登録表の定義と読み書き）、`control-plane → spec-engine`（publish の中身）、`e2e → sdk`
+- **`infra/scripts` は pnpm workspace の外にあり、この検査が届かない。** 中身は workspace のパッケージに置き、
+  `infra/scripts` には資格情報と Cloudflare への書き込みを扱う薄い呼び出しだけを置く（例：publish の中身は control-plane）
 - `apps/*` … インターネットから直接到達する Worker（host, gateway）
 - `packages/*` … **Service Binding 経由でしか到達できない**内部 Worker（data-api）と純粋なライブラリ
 - `data-api` が `packages/` にあるのは意図的。**外部ルートを持たせない**規律をディレクトリで表現している
