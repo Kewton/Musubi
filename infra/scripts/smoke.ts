@@ -2,7 +2,7 @@
 //
 //   pnpm smoke --env <dev|staging|production> [--expect-sha <sha>] [--base-url <url>]
 //
-// 宛先は環境変数 SMOKE_BASE_URL（host の workers.dev のオリジン）。--base-url は手元用で、あれば SMOKE_BASE_URL より優先する。
+// 宛先は環境変数 SMOKE_BASE_URL（host のオリジン。dev・staging は workers.dev、production は独自ドメイン）。--base-url は手元用で、あれば SMOKE_BASE_URL より優先する。
 // 環境変数 SMOKE_PROBE_TOKEN があれば X-Musunest-Probe ヘッダに載せる。**--env production では必須**（下の「production」）。
 // 全層 ok なら exit 0、それ以外は exit 1（引数の誤りも 1）。
 //

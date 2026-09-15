@@ -13,7 +13,7 @@ name: deploy-production
 #     CLOUDFLARE_API_TOKEN_PROD / CLOUDFLARE_ACCOUNT_ID_PROD … ① ② だけ（アカウント②）。wrangler には CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID として渡す
 #     MUSUNEST_PROBE_TOKEN                                  … ② の gateway と host（deploy-worker.ts が --secrets-file で Worker の secret として載せる）
 #                                                           と ③（SMOKE_PROBE_TOKEN として。X-Musunest-Probe に載せる）だけ
-#     SMOKE_BASE_URL                                      … ③ だけ（production の host の workers.dev のオリジン）
+#     SMOKE_BASE_URL                                      … ③ だけ（production の host の独自ドメインのオリジン。#33）
 # **リポジトリの Secret**（staging と同じ値）
 #     R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_S3_ENDPOINT … ⓪ だけ。backend（state の置き場）は production でもアカウント①の R2
 # **使わない**：TF_CLOUDFLARE_API_TOKEN_PROD（GitHub に無い）。このワークフローで terraform plan / apply を production に対して行わない（#4）

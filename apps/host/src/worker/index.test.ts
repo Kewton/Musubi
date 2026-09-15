@@ -129,6 +129,11 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
   it(`独自ドメインは ${env === "production" ? "app.musunest.com の custom domain だけ" : "持たない"}（ゾーンはアカウント②。Issue #33）`, () => {
     expect(config.routes ?? []).toEqual(env === "production" ? [{ pattern: "app.musunest.com", custom_domain: true }] : []);
   });
+
+  it(`workers.dev と Preview URL を${env === "production" ? "閉じる（入口は独自ドメインだけ）" : "開けておく（貫通スモークの宛先）"}`, () => {
+    expect(config.workers_dev).toBe(env !== "production");
+    if (env === "production") expect(config.preview_urls).toBe(false);
+  });
 });
 
 describe("CLOUDFLARE_ENV（ビルド時の env）", () => {
