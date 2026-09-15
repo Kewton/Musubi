@@ -17,7 +17,7 @@
 
 | 層 | 決めること | `02` の書き方でいうと | 動かす場所（店頭） | M1a |
 |---|---|---|---|---|
-| **データ連携** | 外の Web API とのやり取り、データの取り込み・書き出し（データシンク） | 無い | 未定 | **作らない**（層の席だけ残す） |
+| **データ連携** | 外の Web API とのやり取り、データの取り込み・書き出し（データシンク） | 無い | `packages/connector`（Connector Plane。M6 まで空） | **作らない**（層の席だけ残す） |
 | **データ** | データモデル：entity・項目・型・参照・必須・既定値 | `entities` | `appspec-schema`（形）・`app-do`（DO に保存） | 作る |
 | **ロジック** | CRUD、計算（computed・集計）、function、保存してよい条件、操作してよい条件 | `validations`・`computed`・`actions` | `data-api`・`spec-engine` | 作る |
 | **権限**（全層に効く） | 誰が読めるか・書けるか・どの操作をできるか | `permissions`・`minIdentity` | `data-api` | `anonymous` だけ（ログインは M2） |
