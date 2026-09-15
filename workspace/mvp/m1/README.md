@@ -9,64 +9,100 @@
 
 ## 0. 一言でいうと
 
-**CommandAgent（工場）が作って検証した割り勘アプリの納品物を、MUSUNEST（店頭）が R2 から読み込み、staging のスマホで実際に使える状態にする。**
-あわせて、工場と店頭のあいだの接点（headless 契約とピン）を、プラットフォーム側から一通り動かす。
+この節で言いたいこと：
+CommandAgent（工場）が生成・検証した割り勘アプリを、MUSUNEST（店頭）が R2 から読み込み、staging のスマートフォンで実際に動かせる状態にする。
 
-M0 は「空の店舗」を作った（host → gateway → data-api → D1 / R2 / DO が3環境で動く）。M1 はそこに**最初の商品を1つ並べる**。
-ログイン・Community・招待・リアルタイム同期は M2 の仕事で、M1 では作らない（§6）。
+M0 では「空の店舗」を構築した。インフラの各層（host → gateway → data-api → D1 / R2 / DO）が 3 環境すべてで疎通した状態である。
+M1 では、その店舗に**最初の商品を 1 つ並べる**。あわせて、工場と店頭の接点（headless 契約とピン）をプラットフォーム側から一通り疎通させる。
+なお、ログイン・Community・招待・リアルタイム同期は M2 の担当であり、M1 では作らない（§6 参照）。
 
-| | M0（完了） | M1（これから） | M2 |
+| マイルストーン | 動くもの | 主な利用者 | 工場との接点 |
 |---|---|---|---|
-| 動くもの | `/healthz` の貫通スモーク | **封緘済み golden 割り勘が1つ動く** | 自分たちで作って共有して使う（TTSU ≤10分） |
-| 使う人 | CI | 所有者のスマホ（ログインなし） | 招待されたメンバー（ゲスト claim・Google OAuth） |
-| 工場との接点 | ピンを書いただけ | **ピンで読んで、再検証まで回す** | Queue から自動で生成を起動する（連携 Lv2） |
+| M0（完了） | `/healthz` の貫通スモーク | CI | ピンの記述のみ |
+| **M1（これから）** | **封緘済み golden 割り勘が 1 つ動く** | 所有者のスマートフォン（ログインなし） | **ピンで読み込み、再検証まで回す** |
+| M2 | 自分たちで作って共有し利用する（TTSU ≤ 10分） | 招待されたメンバー（ゲスト claim・Google OAuth） | Queue から自動生成を起動する（連携 Lv2） |
+
+### 主要な用語
+
+M1 で頻出する専門用語の意味を以下にまとめる。
+
+| 用語 | 意味 |
+|---|---|
+| L2（Level 2） | 画面コードを持たず、データ構造と計算式の宣言（`app.spec.yaml`）だけで完結する仕様水準。 |
+| bundle（納品物） | 工場（CommandAgent）が生成・検証した成果物一式。R2 にそのまま配置する。 |
+| manifest | bundle に含まれる全ファイルの SHA-256 ハッシュ値とファイルサイズを記録した一覧ファイル。 |
+| golden | 回帰テスト用に封緘（固定）された標準の生成要求文、またはその生成結果。 |
+| 封緘（ふうかん） | 成果物のハッシュ値（SHA-256）を固定し、以降の改ざんや勝手な変更を防ぐこと。 |
+| ピン | 依存する外部成果物（スキーマや bundle など）の SHA-256 や版を `pins/` 配下で固定すること。 |
+| headless 契約 | CommandAgent を CLI から呼び出し、JSON（`--summary-json`）と終了コードで結果を機械的に受け渡す規律。 |
+| verdict / assurance | 工場の判定結果。verdict は最終の判定（`full` 等）、assurance は検証がどこまで保証しているか（`partial` 等）。 |
+| computed | 登録されたフィールド値をもとに、定義された計算式から自動算出される値。 |
+| Instant Renderer | spec を解釈し、一覧画面・入力フォーム・computed の表示をブラウザ上で動的に生成する画面。 |
+| Service Binding | Cloudflare Workers 同士がインターネットを経由せず、安全かつ高速に直接通信する仕組み。 |
+| Durable Object（DO） | Cloudflare が提供する、個別のストレージ（SQLite）を持つステートフルな実行環境。 |
 
 ---
 
 ## 1. ゴール
 
-### 1.1 完了条件（企画書22章 M1 を、このリポジトリの言葉で言い直したもの）
+この節で言いたいこと：
+封緘済み golden 割り勘アプリを staging のスマートフォンで動かし、工場（CommandAgent）との接点を確立する。
+
+### 1.1 完了条件
+
+企画書 22 章の M1 定義を、本リポジトリの言葉に置き換えた完了条件である。
 
 | # | 項目 | 完了条件 |
 |---|---|---|
-| M1-1 | ミニアプリを配れる | R2 に置いた納品物（bundle）を host が実行時に読み込み、アプリのデータが Durable Object に保存される経路が通る。**封緘済み golden 割り勘が staging のスマホで動く** |
-| M1-2 | CommandAgent 連携 Lv1 | ① headless 契約で工場の結果を読める ② ピン差し替えの儀式を1回行う ③ one-shot の生成 → R2 → スマホまでを一気通貫で通す ④ 納品物の決定的な再検証をプラットフォーム側から再現する |
+| M1-1 | ミニアプリの配信 | R2 に配置した納品物（bundle）を host が実行時に読み込み、データが Durable Object に保存される。**封緘済み golden 割り勘が staging のスマホで動く**。 |
+| M1-2 | CommandAgent 連携 Lv1 | ① headless 契約で工場の結果を読み取れる。<br>② ピン差し替えの儀式を 1 回行う。<br>③ one-shot 生成 → R2 → スマホ確認までを一気通貫で通す。<br>④ 納品物の決定的な再検証をプラットフォーム側から再現する。 |
 
-### 1.2 ゲート（2026-09-15 に事前宣言済み・`../m0/05-acceptance.md` §7）
+### 1.2 ゲート（2026-09-15 事前宣言済み・`../m0/05-acceptance.md` §7）
 
-「封緘済み golden 割り勘が staging のスマホで動く」。判定者は Kewton、期限は M1 着手から 2 週間（着手日は未記入）。判定方法は5項目：
+この節で言いたいこと：
+合否判定は「封緘済み golden 割り勘が staging のスマホで動く」ことである。判定者は Kewton、期限は M1 着手から 2 週間（着手日は未定）である。
 
-1. 手持ちのスマホ1台で staging の URL を開く（OS とブラウザを記録）
-2. 封緘済み golden の割り勘を起動する
-3. golden のシナリオどおりに入力し、**結果が golden の期待値と一致する**
-4. 再読み込みしても、別の端末で開いても、データが残っている（DO に保存されている）
-5. 配った bundle の SHA-256 が `pins/` の値と一致することを、機械（smoke か e2e）で確かめる
+判定方法は以下の 5 項目である。
 
-> ⚠️ **3 の「期待値」がまだ定義できていない**（§2.3）。着手前に決める（`00` の Q2）。
+1. 手持ちのスマートフォン 1 台で staging の URL を開く（OS とブラウザを記録する）。
+2. 封緘済み golden の割り勘アプリを起動する。
+3. golden のシナリオどおりに入力し、**結果が golden の期待値と一致する**ことを確かめる。
+4. 再読み込みしても、別の端末で開いても、データが保持されている（DO に保存されている）ことを確かめる。
+5. 配布した bundle の SHA-256 が `pins/` の値と一致することを、機械（smoke または e2e）で検証する。
+
+> ⚠️ **項目 3 の「期待値」はまだ定義されていない**（§2.3 参照）。着手前に決定する（[`00-open-questions.md`](./00-open-questions.md) の Q2）。
 
 ---
 
 ## 2. 何を動かすのか：封緘済み golden 割り勘の実体
 
+この節で言いたいこと：
+動かす対象は、CommandAgent で封緘済みの L2 割り勘アプリである。支出 1 件ごとの計算のみを行い、複数支出にまたがる精算機能は含まない。
+
 ### 2.1 納品物（bundle）
 
-CommandAgent（`pins/commandagent.json` の revision `031ec74`。2026-09-15 時点の main と同じ）には、割り勘の **L2 の納品物が1つ、R2 に置く形のまま封緘されている**。
+CommandAgent（`pins/commandagent.json` の revision `031ec74`。2026-09-15 時点の main と一致）には、割り勘の **L2 納品物が 1 つ、R2 配置用の形式のまま封緘されている**。
 
 | 項目 | 値 |
 |---|---|
-| 場所 | `workspace/management/runs/cm4-delivery-bundle-001/bundle/`（CommandAgent） |
-| 形式 | `commandagent.community-delivery-bundle/v1`（`bundle-manifest.json` が 11 ファイルの SHA-256 とサイズを列挙する） |
-| 由来 | 封緘済みスイート `community-golden-warikan`（要求文3種。`community-golden.sha256sums` で封緘）の1回の生成。修復 0 回 |
-| 成果物の段 | **L2**（`app.spec.yaml` だけ。`app-zone/` のコードは無い） |
-| 検証 | S（spec）pass・Z（境界）pass・B（ビルドとスモーク）は L2 なので対象外。再検証を2回行って同じ bytes・同じ verdict |
-| headless の要約 | `verdict: full`、**`assurance: partial`** |
-| スキーマ | `community.app-spec/v0.1`。SHA-256 は `pins/commandagent.json` の `appspec_schema.sha256` と**一致**（`80e4cb41…`） |
-| manifest の SHA-256 | `9e0865ea86a35070d7f3e6b87d615aaf2ac6c9f80aec7cb5958b2c6ed8eefdb8` |
+| 配置場所 | `workspace/management/runs/cm4-delivery-bundle-001/bundle/`（CommandAgent 側） |
+| 形式 | `commandagent.community-delivery-bundle/v1` |
+| 由来 | 封緘済みスイート `community-golden-warikan`（要求文 3 種。`community-golden.sha256sums` で封緘）から 1 回の生成（修復 0 回） |
+| 成果物の水準 | **L2**（`app.spec.yaml` のみ。画面コード `app-zone/` は含まない） |
+| 検証結果 | S（spec）pass、Z（境界）pass（B は L2 のため対象外）。再検証 2 回で同一バイト・同一 verdict |
+| headless 判定 | `verdict: full`、**`assurance: partial`** |
+| スキーマ | `community.app-spec/v0.1`（SHA-256 は `pins/commandagent.json` の `appspec_schema.sha256` と一致: `80e4cb41…`） |
+| manifest SHA-256 | `9e0865ea86a35070d7f3e6b87d615aaf2ac6c9f80aec7cb5958b2c6ed8eefdb8` |
 
-`assurance: partial` は隠し事ではなく、CommandAgent の契約どおりの正直なラベルである——**L2 の「full」は「spec は検証済み。実行時のスモークはプラットフォーム統合が受け持つ」という意味**で、工場は画面で動かしていない。
-**M1 はまさにその「プラットフォーム統合側の被覆」を埋める**マイルストーンである。
+- `bundle-manifest.json` は、11 ファイルの SHA-256 とファイルサイズを記録している。
+- `assurance: partial` は隠し事ではなく、CommandAgent の契約に基づく正規のラベルである。
+- L2 における「full」は、「spec の検証は完了した。実行時のスモークはプラットフォーム統合側が受け持つ」という意味である。工場側では画面を動かしていない。
+- **M1 は、この「プラットフォーム統合側の被覆」を実装する**マイルストーンである。
 
 ### 2.2 アプリの中身（`artifacts/app.spec.yaml`）
+
+この節で言いたいこと：
+支出を 1 件ずつ登録し、1 件ごとに「1 人あたりの支払額」「立て替えた人の受取額」を算出する仕様である。
 
 ```yaml
 entities:
@@ -83,195 +119,261 @@ permissions: [{ name: read, subject: minIdentity }]
 minIdentity: { mode: anonymous }
 ```
 
-（原本はブロック形式の YAML。ここでは読みやすさのためにフロー形式へ畳んだ。バイト列の正本は CommandAgent 側）
-
-つまり、**支出を1件ずつ登録し、1件ごとに「一人あたりの額」「立て替えた人が受け取る額」を出す**アプリである。
+（原本はブロック形式の YAML である。ここでは可読性のためフロー形式で掲載した。正本のバイト列は CommandAgent 側にある。）
 
 ### 2.3 スキーマ v0.1 で表現できること・できないこと
 
-v0.1 は小さい（355 バイト）。computed は**同じ entity の中だけ**を参照でき（`reference_scope: same_entity`）、全体への参照は QUEUED（未解禁）。登録関数は `min`・`max`・`len` だけ。
+この節で言いたいこと：
+スキーマ v0.1 は単一レコード内の計算に限定されており、複数支出をまたぐ全体精算（誰が誰へいくら）は表現できない。
 
-| 表現できる | 表現できない（v0.1 では） |
+v0.1 は 355 バイトと極めて小さい。computed は同一 entity 内のみを参照できる（`reference_scope: same_entity`）。全体参照は未解禁（QUEUED）であり、組み込み関数は `min`・`max`・`len` のみである。
+
+| 表現できること | 表現できないこと（v0.1 の制限） |
 |---|---|
-| 支出1件ごとの一人あたりの額・立て替え分 | 人ごとの収支の合計（支出をまたぐ集計） |
-| 入力の検証（`amount > 0`） | 「誰が誰へいくら渡すか」の精算（全体参照と精算の標準関数が要る） |
-| 一覧の表示・支出の追加 | メンバーという entity・entity 間の関連 |
+| 支出 1 件ごとの 1 人あたり額・立て替え分 | 支出をまたぐ人ごとの合計収支 |
+| 単一入力の検証（`amount > 0`） | 「誰が誰へいくら渡すか」の全体精算 |
+| 一覧の表示・支出の追加 | メンバー entity や entity 間のリレーション |
 
-企画書8章の割り勘の例（全体の収支から精算を出す形）は、**封緘済みの v0.1 では書けない**。golden の生成も v0.1 の範囲で書かれている。
-そのため、ゲートの判定 3 の「golden の期待値」を「誰が誰へいくら」と読むと、M1 では満たせない。**スキーマの拡張（v0.2）と golden の再封緘は工場側の裁定が要り、M1 の2週間には入らない**見込みである（`00` の Q2）。
+企画書 8 章の割り勘（全体収支から精算を導く形式）は、**封緘済みの v0.1 では表現できない**。golden の生成も v0.1 の範囲内に留まる。
+したがって、ゲート判定 3 の「golden の期待値」を全体精算と解釈すると、M1 では満たせない。
+スキーマ拡張（v0.2）と golden の再封緘には工場側の裁定が必要であり、M1 の 2 週間には収まらない（[`00-open-questions.md`](./00-open-questions.md) の Q2 参照）。
 
 ### 2.4 v0.1 が決めていない「実行時の意味」
 
-スキーマは宣言の形を決めるが、**動かしたときの意味の多くは決めていない**。スキーマは platform-owned（MUSUNEST が正本）なので、M1 でプラットフォームが決める（スキーマのバイト列は変えない）。
+この節で言いたいこと：
+スキーマは構文を定義しているが、実行時の具体的な解釈は未定義である。この解釈はプラットフォーム側（MUSUNEST）が決定する。
 
-| 宣言 | 決めていないこと | 例 |
+スキーマは MUSUNEST が正本を持つ（platform-owned）。そのため、スキーマのバイト列は変更せず、実行時の意味のみを M1 で規定する。
+
+| 宣言項目 | スキーマで決めていないこと | 未定事項の具体例 |
 |---|---|---|
-| `fields` の型 | `list` の要素の型・入力の仕方 | `participants` は名前の文字列の並びか。立て替えた人自身を含むか |
-| `views` | 表示の種類（一覧・集計…） | `expenseList` は一覧でよいか。computed をどこに出すか |
-| `actions` | 何をする操作か（追加・更新・削除） | `addExpense` は1件の追加だけか |
-| `permissions` / `minIdentity` | `subject: minIdentity`・`mode: anonymous` の強制の仕方 | M1 はログインが無いので、誰でも読み書きできる状態になる（§7.3） |
+| `fields` | `list` の要素型・入力形式 | `participants` は文字列リストか。支払者自身を含めるか。 |
+| `views` | 表示レイアウト・種類 | `expenseList` の一覧形式。computed の表示位置。 |
+| `actions` | 処理の具体的内容 | `addExpense` は 1 件追加のみを指すか。 |
+| `permissions` / `minIdentity` | `subject: minIdentity`・`mode: anonymous` の強制方法 | M1 は未認証のため誰でも読み書き可能な状態となる（§7.3 参照）。 |
 
 ---
 
 ## 3. 全体像
 
+この節で言いたいこと：
+手元で bundle を検証して R2 / D1 へ登録し、Cloudflare 上の Worker 群を経由してスマートフォンの画面へ届ける。
+
 ```mermaid
 flowchart LR
-  subgraph BP["Builder Plane（工場・Cloudflare の外・所有者の手元）"]
+  subgraph BP["Builder Plane（工場・手元）"]
     CA["CommandAgent one-shot<br/>--profile community-mini-app"] --> V["verifier（S / Z）"]
     V --> BUNDLE["delivery bundle<br/>manifest SHA-256"]
   end
   subgraph PIN["このリポジトリ"]
     PINS["pins/commandagent.json<br/>schema・bundle の SHA"]
-    PUB["publish（M1 で作る）<br/>manifest を照合 → R2 → D1 に登録"]
-    E2E["e2e（Form A 統合スモーク）"]
+    PUB["publish（M1 で作成）<br/>manifest 照合 → R2 / D1 登録"]
+    E2E["e2e（統合スモーク）"]
   end
   BUNDLE -- "headless 契約<br/>（summary-json・exit code）" --> PUB
   PINS -. 照合 .-> PUB
   subgraph CF["Cloudflare（staging）"]
-    HOST["host<br/>SPA シェル＋Instant Renderer"] -- Service Binding --> GW["gateway"]
-    GW -- Service Binding --> DAPI["data-api<br/>唯一の権限強制点<br/>spec-engine で検証・computed"]
-    DAPI --> R2[("R2 BUNDLES<br/>bundle の原本")]
-    DAPI --> D1[("D1 CONTROL_DB<br/>アプリの登録")]
-    DAPI --> DO[("AppInstanceDO<br/>アプリのデータ")]
+    HOST["apps/host<br/>SPA シェル＋Instant Renderer"] -- Service Binding --> GW["apps/gateway"]
+    GW -- Service Binding --> DAPI["packages/data-api<br/>唯一の権限強制点<br/>spec-engine で検証・computed"]
+    DAPI --> R2[("R2 BUNDLES<br/>bundle 原本")]
+    DAPI --> D1[("D1 CONTROL_DB<br/>アプリ登録")]
+    DAPI --> DO[("AppInstanceDO<br/>アプリデータ")]
   end
   PUB --> R2
   PUB --> D1
   PHONE["所有者のスマホ"] --> HOST
-  E2E -. staging を叩く .-> HOST
+  E2E -. staging を検証 .-> HOST
 ```
 
 ### 3.1 リクエストの流れ（M1 で通す道）
 
-1. **配る**：手元の publish が、bundle の manifest（全ファイルの SHA-256・余分なファイルが無いこと）と `pins/` を照合してから、R2 に原本を置き、D1 に「このアプリ（bundle の SHA）・このインスタンス」を登録する
-2. **開く**：スマホが host の `/apps/<インスタンス>` を開く。ページは SPA シェル（Static Assets）が返す——**SSR にしない**
-3. **読む**：画面が `/api/...` を呼ぶ。host の Worker が gateway へ中継し、data-api が D1 の登録から R2 の spec を引いて返す（host・gateway は R2 に触れない）
-4. **書く**：「支出を追加」は data-api が spec の `validations` で検証してから DO に保存する。computed は data-api が spec-engine で評価して返す
-5. **残る**：再読み込み・別の端末でも、同じインスタンスの DO から同じデータが返る
+リクエスト処理は以下の 5 段階で進む。
+
+1. **配る（配布）**：
+   - 手元の `publish` スクリプトを実行する。
+   - bundle の manifest（全ファイルの SHA-256・余分なファイルが無いこと）と `pins/` を照合する。
+   - 照合完了後、R2 に原本を配置し、D1 にアプリ（bundle の SHA）とインスタンスを登録する。
+2. **開く（閲覧）**：
+   - スマートフォンから host の `/apps/<インスタンス>` を開く。
+   - SPA シェル（Static Assets）から画面が返る。**SSR は行わない**。
+3. **読む（取得）**：
+   - 画面が `/api/...` を呼び出す。
+   - host の Worker が gateway へ中継し、data-api が D1 の登録情報をもとに R2 の spec を引いて返す。
+   - host および gateway は R2 に直接触れない。
+4. **書く（登録・計算）**：
+   - 「支出を追加」する際、data-api が spec の `validations` に基づいて入力を検証し、DO に保存する。
+   - computed は data-api が `spec-engine` を使って評価し、結果を画面に返す。
+5. **残る（永続化）**：
+   - 画面の再読み込みや別端末からのアクセスでも、同一インスタンスの DO から同じデータが返る。
 
 ---
 
 ## 4. M0 から引き継ぐもの・M1 で足すもの
 
-| 部品 | M0 の状態 | M1 で要るもの |
-|---|---|---|
-| `packages/appspec-schema` | 空（`APPSPEC_SCHEMA_VERSION = "0.0.0-m0"`） | v0.1 のスキーマのバイト列を正本として持つ（SHA がピンと一致）。型・§2.4 の実行時の意味の定義 |
-| `packages/spec-engine` | 空 | computed の評価（閉じた式・AST の深さ 12・ノード 64・同じ entity の中・トポロジカル順）と validations の評価。**評価の前に静的に検査する** |
-| `packages/app-do` | `kv` 表だけ（healthz 用） | entity のレコードを持つ表。インスタンスごとに1つの DO（クラス名 `AppInstanceDO` は変えない） |
-| `packages/control-plane` | `_musunest_meta` の表だけ | アプリ（bundle）とインスタンスの登録の表（D1 の migration。前方互換の規律どおり） |
-| `packages/data-api` | `/healthz` だけ | spec を返す・レコードの一覧と追加（検証つき）・computed を返す API。R2 から spec を読む |
-| `apps/gateway` | `/healthz` の中継 | `/api/...` の中継（M1 は認可なし。M2 で AppGrant の検査が入る） |
-| `apps/host` | `/api/*` は 404 を返すだけ | `/api/*` を gateway へ中継する。**Instant Renderer**（spec から一覧・入力フォーム・computed の表示を作る画面） |
-| `packages/sdk` | 空 | 画面から data-api を呼ぶ型付きの入口（host が使ってよいのは sdk だけ） |
-| `e2e` | 空 | Form A 統合スモーク：publish → インスタンス作成 → 追加 → computed・永続化・bundle の SHA を照合 |
-| `pins/commandagent.json` | schema・headless の版は確定。テンプレの tarball は null（#38） | golden の bundle のピン（manifest の SHA-256） |
-| `templates/tanstack-start` | README だけ | L2 の golden には使わない。扱いは `00` の Q4 |
-| `infra/scripts` | deploy・smoke・計測 | publish（bundle を置いて登録する）・再検証の再現（§5 ④） |
-| 計測 | health chain の CPU 時間 | **spec の読み込みと computed の評価の CPU 時間を staging で実測する**（`../m0/06-plan-and-limits.md` §4.1 で M1 に持ち越した宿題） |
+この節で言いたいこと：
+M0 の疎通基盤の上に、spec の解釈・評価・UI 生成・永続化の各コンポーネントを実装する。
 
-依存の向き（`infra/scripts/dep-graph.mjs`）は**変えずに通せる**：data-api は appspec-schema・sdk・spec-engine・app-do を使ってよく、host は sdk だけを使う。
-computed を画面側で評価したくなったら host → spec-engine の辺が要り、それは dep-graph の変更（人が直す）になる。**M1 はサーバ側で評価する前提**にしてある。
+| 対象領域 | M0 の状態 | M1 で要るもの |
+|---|---|---|
+| `packages/appspec-schema` | バージョン定数のみ（`APPSPEC_SCHEMA_VERSION = "0.0.0-m0"`） | v0.1 スキーマ正本（SHA 一致）、型定義、実行時の意味の定義 |
+| `packages/spec-engine` | 未実装 | computed 式の評価（閉じた式・AST の深さ 12・ノード 64・同一 entity 内・トポロジカル順）、validations の評価。**評価の前に静的検査を行う** |
+| `packages/app-do` | healthz 用の `kv` 表のみ | entity レコード保持用の表、1 インスタンス 1 DO（クラス名 `AppInstanceDO` は変えない） |
+| `packages/control-plane` | メタ表（`_musunest_meta`）のみ | アプリ（bundle）とインスタンス登録用の D1 マイグレーション（前方互換の規律どおり） |
+| `packages/data-api` | `/healthz` のみ | spec 取得（R2 から読む）、レコード一覧・追加（検証つき）、computed 評価の各 API |
+| `apps/gateway` | `/healthz` の中継のみ | `/api/...` の中継（M1 は認可なし。M2 で AppGrant 検査を追加） |
+| `apps/host` | `/api/*` は 404 応答 | `/api/*` の中継、**Instant Renderer**（画面生成機能） |
+| `packages/sdk` | 未実装 | host から data-api を呼び出す型付きクライアント |
+| `e2e` | 未実装 | Form A 統合スモーク（publish → 作成 → 追加 → 計算・永続化照合） |
+| `pins/commandagent.json` | スキーマ・headless の版は確定。テンプレの tarball は null（#38） | golden bundle のピン（manifest の SHA-256） |
+| `templates/tanstack-start` | README のみ | L2 の golden には使わない。扱いは Q4 で決める |
+| `infra/scripts` | deploy・smoke・計測 | publish スクリプト、再検証の再現スクリプト（§5 ④） |
+| 計測 | health chain の CPU 時間 | staging での spec 読み込みと computed 評価の CPU 時間実測 |
+
+- **依存の向き**：`infra/scripts/dep-graph.mjs` を変えずに実装できる。data-api は `appspec-schema`・`sdk`・`spec-engine`・`app-do` を参照できる。host は `sdk` のみを参照する。
+- **computed の評価場所**：画面側で評価すると host → spec-engine の依存が必要になり、人による dep-graph の変更が発生する。そのため、**M1 ではサーバ側（data-api）で評価する**。
+- **CPU 時間の実測**：`../m0/06-plan-and-limits.md` §4.1 からの持ち越し課題である。staging 環境で実測を行う。
 
 ---
 
 ## 5. CommandAgent 連携 Lv1 を具体的にすると
 
-接点は企画書21章のとおり2つだけ：**headless 契約**と**封緘 artifact のピン**。CommandAgent のコードはこのリポジトリに持ち込まない。
+この節で言いたいこと：
+CommandAgent のコードは直接取り込まず、headless 契約（JSON 出力）とピン（ハッシュ固定）の 2 点のみで疎通する。
 
-| # | 項目 | このリポジトリで行うこと | 工場側・人の作業 |
+| # | 項目 | 本リポジトリで行うこと | 工場側・人の作業 |
 |---|---|---|---|
-| ① | headless 契約の疎通 | `--summary-json` の最終行（`commandagent.headless-summary/v1`）を読む薄い部品。**終了コードだけで合否を決めず、`verdict` と `assurance` の両方を見る**（CommandAgent の headless 文書の規則） | 🧑 手元で CommandAgent を動かす（ローカルモデルと API キーは工場側にだけ置く） |
-| ② | ピン差し替えの儀式を1回 | 手順を runbook にする：新旧のピンを並べて照合 → 回帰（再検証・e2e）→ 旧ピンを外す → 1コミットで記録 | 🧑 どのピンを差し替えるか決めて承認（`00` の Q9） |
-| ③ | one-shot 生成 → R2 → スマホ | publish で staging に置き、スマホで開く | 🧑 要求文を入れて生成を1回走らせ、bundle を作る |
-| ④ | 決定的な再検証の再現 | bundle の manifest の照合（TypeScript）と、ピンした版の CommandAgent の offline verifier の呼び出し。結果が bundle の `reverification.json` と一致すること | 🧑 手元で実行するか CI で実行するか（`00` の Q8） |
+| ① | headless 契約の疎通 | `--summary-json` の最終行（`commandagent.headless-summary/v1`）を読む薄い部品を実装する。 | 手元で CommandAgent を動かす（API キー等は手元に保持）。 |
+| ② | ピン差し替えの儀式（1回） | runbook を作り、実施する（新旧のピンを並べて照合 → 回帰（再検証・e2e）→ 旧ピンを外す → 1 コミットで記録）。 | 差し替えるピンの選定と承認を行う（Q9 参照）。 |
+| ③ | one-shot 生成の導通確認 | 生成された bundle を staging に publish し、スマホで開く。 | 要求文を入力して one-shot 生成を 1 回実行する。 |
+| ④ | 決定的な再検証の再現 | TypeScript で manifest を照合し、ピンした版の CommandAgent の offline verifier を呼ぶ。結果が bundle の `reverification.json` と一致することを確かめる。 | 手元または CI での実行環境を判断・確認する（Q8 参照）。 |
 
-> ③ の生成物は golden（§2）とは別物になる。ゲートは**封緘済みの golden**で判定し、③ は「工場から店頭まで一回通った」ことの証拠として扱う（`00` の Q1）。
+- **判定基準**：① の headless 契約では、終了コードだけで合否を決めない。必ず `verdict` と `assurance` の両方を確認する。
+- **生成物の位置づけ**：③ で新しく生成した成果物は、封緘済み golden（§2 参照）とは別物である。ゲート判定は**封緘済みの golden**で行い、③ は「工場から店頭まで通った」証拠として扱う（Q1 参照）。
 
 ---
 
 ## 6. M1 で作らないもの
 
-| 作らないもの | どこで |
+この節で言いたいこと：
+M1 は「店頭に最初の商品を 1 つ並べる」ことに専念し、認証・リアルタイム同期・完全自動化は見送る。
+
+| 作らないもの | 理由・対応予定 |
 |---|---|
-| ログイン（Google OAuth）・ゲスト claim・Community・招待リンク・AppGrant の検査 | M2 |
-| リアルタイム同期（DO の WebSocket） | M2（M1 は再読み込みで同じデータが見えれば足りる） |
-| Queue からの自動生成・修復枯渇時の昇格（連携 Lv2）・Progressive Delivery | M2 |
-| TTSU のファネル・帰属分類ログなどの計測基盤 | M2 |
-| L3（server functions・Workers for Platforms）・L4（sandboxed iframe の UI） | L3 は M5〜M6 まで使わない（`../m0/06-plan-and-limits.md` §3）。L4 は必要になってから |
-| 精算（誰が誰へ）・全体参照の computed・精算の標準関数 | スキーマ v0.2 と golden の再封緘の後（工場側の裁定が要る） |
-| production でのアプリの提供 | M2 以降（ログインが入るまで。`00` の Q5） |
+| ログイン（Google OAuth）、ゲスト claim、Community、招待リンク、AppGrant 認可 | M2 で実装する。 |
+| リアルタイム同期（DO の WebSocket 接続） | M2 で実装する（M1 は再読み込みでデータが残れば足りる）。 |
+| Queue による自動生成、修復枯渇時の昇格（連携 Lv2）、Progressive Delivery | M2 で実装する。 |
+| TTSU ファネル計測、帰属分類ログなどの計測基盤 | M2 で実装する。 |
+| L3（server functions / WfP）、L4（sandboxed iframe UI） | L3 は M5〜M6 まで使わない（`../m0/06-plan-and-limits.md` §3）。L4 は必要時に検討する。 |
+| 全体精算（誰が誰へいくら）、全体参照の computed、精算の標準関数 | スキーマ v0.2 と golden 再封緘の後（工場側の裁定が必要）。 |
+| production 環境でのミニアプリ公開 | M2 以降（認証機能の導入後。Q5 参照）。 |
 
 ---
 
 ## 7. 守る制約
 
+この節で言いたいこと：
+開発規律（CLAUDE.md）、無償枠の制限、未認証状態における運用の規約を厳守する。
+
 ### 7.1 不変条件（`CLAUDE.md`）
 
-- **Data API が唯一の権限強制点。** 検証（validations）・computed の評価・保存は data-api 側で行う。画面の検証は補助にすぎない
-- host・gateway は D1・R2・DO に触れない。bundle も data-api 経由で読む
-- D1 は Control Plane 専用（アプリとインスタンスの登録）。**アプリのデータは DO**
-- CommandAgent のコードを持ち込まない。接点は headless 契約と `pins/` だけ
-- host は SSR にしない。Workers for Platforms・Logpush・`schedule:` のワークフローを使わない
+- **Data API が唯一の権限強制点である**：入力検証（validations）、computed の評価、データ保存はすべて data-api で行う。画面側の検証は補助にすぎない。
+- **直接アクセスの禁止**：host および gateway から D1・R2・DO に直接触れない。bundle も data-api 経由で取得する。
+- **ストレージの分離**：D1 は Control Plane 専用（アプリ・インスタンス管理）とする。**アプリのデータはすべて DO に保存する**。
+- **リポジトリ境界の維持**：CommandAgent のコードを持ち込まない。接点は headless 契約と `pins/` のみとする。
+- **環境制約の遵守**：host は SSR にしない。Workers for Platforms、Logpush、`schedule:` トリガーは使用しない。
 
 ### 7.2 無償枠（`../m0/06-plan-and-limits.md`）
 
-- **CPU 時間は1回の起動あたり 10 ms。** 毎回 YAML を解釈して静的検査をかけると届かないおそれがある。publish の時点で正規化した形を作っておく、評価済みの形を DO に持つ、などを M1 で実測して決める（`00` の Q12）
-- M0 の実測で production の初回だけ 11.30 ms が出ている。**M1 の追加で昇格トリガー（P-1）に触れたら、議論せず $5 に上げる**（層は潰さない）
+- **CPU 時間の上限は 1 起動あたり 10 ms である**：
+  - 毎回 YAML をパースして静的検査を行うと、10 ms を超えるリスクがある。
+  - publish 時に正規化済みの形式を作っておく、評価済みの形を DO に持つ、などの対策を実測に基づいて決める（Q12 参照）。
+- **昇格トリガーへの対応**：
+  - M0 の実測では production 初回実行時に 11.30 ms を記録している。
+  - M1 の追加機能によって昇格トリガー（P-1）に触れた場合は、構成を崩さずに即座に有償プラン（$5）へ昇格する。
 
 ### 7.3 ログインが無いこと
 
-M1 のアプリは誰でも読み書きできる（`minIdentity.mode: anonymous` をそのまま受ける形）。staging の URL は非公開のサブドメインだが秘密ではない。
-**production にはこの状態で出さない**（`00` の Q5）。
+- M1 のアプリは誰でも読み書き可能な状態である（`minIdentity.mode: anonymous` をそのまま適用）。
+- staging の URL は非公開のサブドメインだが、秘密情報ではない。
+- **この認証なしの状態のまま production 環境へ公開してはならない**（Q5 参照）。
 
 ### 7.4 公開リポジトリ
 
-- 企画書は章番号だけで参照する。golden の bundle と CommandAgent の文書は公開リポジトリにあるので、パスと SHA を書いてよい
-- 工場側の API キー・ローカルモデルの設定・生成の費用の明細をこのリポジトリに置かない
+- 企画書を参照する際は、内容を引き写さず章番号のみを記載する。
+- golden の bundle と CommandAgent のドキュメントは公開リポジトリにあるため、パスや SHA-256 を記載してよい。
+- 工場側の API キー、ローカルモデルの設定、生成費用の明細などは本リポジトリに置かない。
 
 ---
 
 ## 8. リスク
 
-| # | リスク | 起きると | 手当て |
+この節で言いたいこと：
+技術仕様・工数・規律に関する 7 つのリスク（R-1〜R-7）を把握し、事前の対策を講じる。
+
+| # | リスク | 発生時の影響 | 事前・事後の手当て |
 |---|---|---|---|
-| R-1 | v0.1 の表現力が、ゲートの「精算」の期待に届かない（§2.3） | 判定 3 を満たせず、期限の直前に線の議論になる | **着手前に期待値を事前宣言し直す**（`00` の Q2） |
-| R-2 | v0.1 の実行時の意味をプラットフォームが決めると、工場の verifier の前提とずれる（§2.4） | 生成物が「検証は通るが画面で意図どおり動かない」 | 実行時の意味を appspec-schema に文書で持ち、ずれを見つけたら工場側へ裁定を依頼する。スキーマのバイト列は変えない |
-| R-3 | CPU 10 ms を超える（§7.2） | staging で動いても production の昇格トリガーに触れる | M1 の中で実測する。超えたら $5 に上げる判断を先に決めておく |
-| R-4 | ログインなしの API が production に出る（§7.3） | 誰でも production の DO に書ける | env で閉じる（production では 404）か、M1 の間はタグを打たない |
-| R-5 | 生成（③）が所有者の手元の環境に依存する | 再現できない・費用が見えない | 生成は証拠づくりに限る。ゲートは封緘済みの golden で判定する |
-| R-6 | 2 週間の期限に対して部品が多い（§4 の 12 行） | 期限切れ | 最短経路（golden を手で publish → 画面 → 保存）を先に通し、Lv1 の ②④ は並走させる |
-| R-7 | orchestrate の実行契約の上限（ソース 30 本程度・`.tf` 不可） | 大きい Issue は dispatch できない | §10 の粒度で切る |
+| R-1 | v0.1 の表現力がゲートの精算要件に届かない（§2.3） | 判定 3 を満たせず、期限直前に合格基準が紛糾する。 | **着手前に期待値を事前宣言し直す**（Q2 参照）。 |
+| R-2 | v0.1 の実行時の意味が工場の verifier とずれる（§2.4） | 仕様検証を通った生成物が、画面で意図どおりに動かない。 | 実行時の意味を appspec-schema に明記する。ずれを発見した場合は工場側へ裁定を依頼する（スキーマのバイト列は変えない）。 |
+| R-3 | 処理時間が CPU 10 ms の上限を超える（§7.2） | staging で動いても production の昇格トリガーに触れる。 | M1 内で CPU 時間を実測する。超過時は即座に $5 プランへ昇格する方針を事前に決めておく。 |
+| R-4 | 認証なしの API が production に露出する（§7.3） | 誰でも production の DO にデータを書き込めてしまう。 | 環境変数で無効化（production では 404 を返却）するか、M1 期間中はリリースタグを打たない。 |
+| R-5 | one-shot 生成（③）が所有者の手元環境に依存する | 結果を再現できず、生成費用が見えない。 | 生成は疎通の証拠づくりに留め、ゲート判定は封緘済みの golden で行う。 |
+| R-6 | 2 週間の期限に対して部品数が多い（§4） | 開発期間内に完了しない。 | 最短経路（golden の手動 publish → 画面表示 → 保存）を最優先で開通させ、Lv1 の ②④ は並行して進める。 |
+| R-7 | orchestrate の実行契約上限（ソース約 30 本・`.tf` 変更不可）に抵触する | 大きすぎる Issue を自動 dispatch できない。 | §10 の方針に従い、適切な粒度に Issue を分割する。 |
 
 ---
 
 ## 9. 人の作業（🧑）
 
-| いつ | 作業 |
+この節で言いたいこと：
+着手前・実装中・検収時の各段階で、所有者本人が行う判断および作業を明確にする。
+
+| タイミング | 作業内容 |
 |---|---|
-| 着手前 | `00-open-questions.md` の決定。**M1 の着手日を決めて `../m0/05-acceptance.md` §7 に書く**（ゲートの期限が決まる） |
-| 途中 | CommandAgent で one-shot の生成を1回走らせて bundle を作る（③）。ピン差し替えの儀式の承認（②） |
-| 途中（該当すれば） | 再検証を手元で実行する（④）。production への反映の承認（M1 の範囲で出すものがあれば） |
-| 最後 | スマホでゲートの判定 1〜4 を行い、記録する。清算表を書く |
+| 着手前 | `00-open-questions.md` の全項目を決定する。<br>**M1 の着手日を決定し、`../m0/05-acceptance.md` §7 に記入する**（ゲートの期限が確定する）。 |
+| 実装中 | CommandAgent で one-shot 生成を 1 回実行し、bundle を作成する（③）。<br>ピン差し替えの儀式を承認する（②）。 |
+| 実装中（必要時） | 手元で再検証を実行する（④）。<br>production への反映を承認する（M1 の範囲で対象がある場合）。 |
+| 検収時（最後） | 実機のスマートフォンでゲート判定 1〜4 を実施し、結果を記録する。<br>清算表を記入する。 |
 
 ---
 
 ## 10. Issue の切り出し方針（概略）
 
-Issue の一覧は、`00` の決定を受けてから別の文書にする。ここでは粒度と順番だけを決めておく。
+この節で言いたいこと：
+Issue は 1 パッケージ前後・ソース 30 本程度までの単位で分割し、土台・経路・画面・証拠の順で実装を進める。
 
-- **1 Issue = 1 パッケージ前後、ソース 30 本程度まで**（orchestrate の実行契約の上限。`.tf` を含む変更は監督側）
-- 波の順：
-  1. **土台（並列）**：appspec-schema（スキーマの正本・型・実行時の意味）／spec-engine（評価と静的検査）／app-do（レコードの表）／control-plane（登録の migration）
-  2. **経路**：data-api（spec・レコード・computed の API）→ gateway・host の中継
-  3. **画面**：Instant Renderer（host）＋ sdk
-  4. **証拠**：publish のスクリプト・golden のピン・e2e（ゲートの判定 5）・CPU の実測
-  - **Lv1 のレーン（1 と並走）**：headless の読み取り・再検証の再現・ピン差し替えの runbook
-- 既存の M1 の Issue：#38（テンプレの tarball の SHA）は `00` の Q4 の決定で扱いを決める。#19（商標の発注）は M1 の技術の作業とは独立
+- **分割の基準**：
+  - 1 Issue あたり 1 パッケージ前後、ソースコード 30 本程度を上限とする（orchestrate の実行契約制約）。
+  - `.tf` を含む変更は監督側（人と Claude）が担当する（orchestrate の scope に載らないため）。
+- **実装順序（波）**：
+  1. **波 1：土台（並列作業可）**：
+     - `appspec-schema`：スキーマ正本、型定義、実行時の意味の定義
+     - `spec-engine`：式評価および静的検査
+     - `app-do`：レコード保持用のテーブル設計
+     - `control-plane`：登録用 D1 マイグレーション
+  2. **波 2：経路**：
+     - `data-api`：spec 取得、レコード一覧・追加、computed 評価の各 API
+     - `gateway` / `host`：API 中継処理
+  3. **波 3：画面**：
+     - `host`：Instant Renderer（画面生成機能）
+     - `sdk`：型付きクライアント
+  4. **波 4：証拠**：
+     - `publish` スクリプトの作成
+     - golden のピン定義
+     - e2e テストの実装（ゲート判定 5）
+     - CPU 時間の実測
+  - **並行レーン（波 1 と並走）**：
+    - Lv1 連携：headless 契約の読み取り、再検証の再現、ピン差し替え runbook の整備
+- **既存の M1 関連 Issue**：
+  - #38（テンプレート tarball の SHA）：Q4 の決定に基づき扱いを確定する。
+  - #19（商標調査の発注）：技術的な開発作業とは独立して進める。
 
 ---
 
 ## 11. 次の一手
 
-1. 所有者が [`00-open-questions.md`](./00-open-questions.md) に答える（おすすめで良ければその旨）
-2. 決定を受けて Issue の一覧（依存と波）を作り、起票する
-3. 着手日を決めて、ゲートの期限を確定させる
+この節で言いたいこと：
+所有者の判断を受けて Issue を起票し、着手日を決めて M1 の開発に入る。
+
+1. 所有者が [`00-open-questions.md`](./00-open-questions.md) の全問に回答する（おすすめの採用でよければその旨を合意する）。
+2. 回答結果を受けて、依存関係と波を整理した Issue 一覧を作成し、起票する。
+3. M1 の着手日を確定し、受入ゲートの完了期限を確定させる。
