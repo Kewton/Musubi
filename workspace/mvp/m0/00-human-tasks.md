@@ -393,7 +393,9 @@ M0でやることは「有効化」ではなく「**要らないことを確定�
 
 > M1のForm A（共通ホスト＋アドオン）は、UIが sandboxed module、actions が WfP isolated function。**M1で actions を含むアプリを扱うなら WfP が要る**——が、MVP 3アプリはすべてL2で actions を持たないため、M1のスコープでも不要。**この境界を M1 着手時に再確認すること。**
 
-### 🧑 H-10：LINE Developers（M2用・先行）
+### 🧑 H-10：LINE Developers（⏸ 保留）
+
+> **⏸ 2026-09-15 保留（本人判断）**：ログインは、プロダクトが軌道に乗り利用者から要望が出るまで **Google OAuth のみ**にする（H-11）。LINE Login はその時点で再開する。
 
 - [ ] LINE Developers アカウント作成・Provider 作成
 - [ ] **dev用 LINE Login チャネル**を先行作成（企画書11章「ローカル開発の穴：LINE Login → devチャネル/mock」）
@@ -401,7 +403,7 @@ M0でやることは「有効化」ではなく「**要らないことを確定�
 
 > M2で必要になってから作ると、審査・設定確認で数日待たされる。**M0のうちに枠だけ取る。**
 
-### 🧑 H-11：Google Cloud プロジェクト ＋ OAuth 同意画面（M2用・先行）
+### 🧑 H-11：Google Cloud プロジェクト ＋ OAuth 同意画面（M2用・先行。**M2 のログインはこれだけ**）
 
 - [ ] プロジェクト作成・OAuth 同意画面の設定（外部・テストユーザー）
 - [ ] dev/staging 用の OAuth クライアントID を先行発行
@@ -427,7 +429,7 @@ M0でやることは「有効化」ではなく「**要らないことを確定�
 | H-07 | main保護・Environments設定 | **YES**（CI前） | 15分（AI代行可） | **✅ 完了**（2026-09-12。初回push後にmain保護を適用。⚠️ 管理者bypass可は `01` §8.1） |
 | H-08 | Secrets/Variables 登録 | **YES**（CI前） | 15分 | **✅ 完了**（2026-09-12。Secrets 6/6・Variables 4/5。`CLOUDFLARE_ZONE_ID` は H-04 待ち） |
 | H-09 | ~~WfP有効化~~ → **M5〜M6へ延期**（M0は不要の確定のみ） | NO | 5分 | ☐ |
-| H-10 | LINE Developers dev チャネル | NO（M2まで） | 30分 | ☐ |
+| H-10 | LINE Developers dev チャネル | NO | 30分 | ⏸ 保留（2026-09-15。ログインは当面 Google OAuth のみ） |
 | H-11 | Google OAuth クライアント | NO（M2まで） | 20分 | ☐ |
 | H-12 | CommandAgent 接点・ピン対象の確定 | NO（M1まで） | 30分 | **一部✅**（所在確認済／ピン確定はM1） |
 | H-13 | 予算方針（$0宣言）＋昇格トリガーの承認 | **YES** | 10分 | **✅ 完了**（2026-09-12。8件承認・即決者=本人・毎週月曜） |

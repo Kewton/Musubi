@@ -44,7 +44,7 @@
 **M0で作らないもの**（意図的スコープ外・M1以降）
 - ミニアプリの生成・配信（Form A経路・R2 bundle動的ロード）→ **M1**
 - CommandAgent連携（headless契約の疎通・ピン差し替えの儀式）→ **M1**
-- 認証（LINE/Google）・ゲストclaim・招待リンク・Instant Runtime → **M2**
+- 認証（Google OAuth。LINE Login は軌道に乗り要望が出てから）・ゲストclaim・招待リンク・Instant Runtime → **M2**
 - Connector Plane / Turnstile本運用 / Stripe → M4以降
 
 > M0は「**中身が空でも、3環境が手作業ゼロで再現でき、CIから配れて、Service Bindingsが端から端まで結線されている**」ことだけを証明する回。機能を足したくなったらIssueにしてM1へ送る。
@@ -103,7 +103,7 @@ graph TD
 3. **リクエスト経路はTypeScript一択**（9章）。M0で作るWorkerはすべてTS。
 4. **Data APIが唯一の権限強制点**（9章）。M0では権限を実装しないが、**gateway が D1/R2/DO に直接触らない**構造だけは最初から守る（触れるのは data-api のみ）。
 5. **1アプリインスタンス＝1 Durable Object（SQLite付き）／D1はControl Plane専用**（9章）。M0のDOは health probe だけだが、SQLite migration を最初から `new_sqlite_classes` で切る。
-6. **Cloudflareに載せないもの**（11章）：Builder Plane・LLM API・LINE/Googleチャネル設定・EXT-2メール送信・Stripe。M0のTerraformにこれらを入れない。
+6. **Cloudflareに載せないもの**（11章）：Builder Plane・LLM API・Google OAuth のクライアント設定・EXT-2メール送信・Stripe。M0のTerraformにこれらを入れない。
 7. **Platform固有機能への依存はAdapter層に閉じ込める**（11章）。M0では `packages/*` から `cloudflare:workers` を直接importするのは `app-do` のみに限定する。
 8. **無償プラン前提**（→ [`06`](./06-plan-and-limits.md)）：**M0は Cloudflare Free で $0**。これが2つの設計を確定させる——
    - **host は SSR ではなく SPAシェル＋Static Assets**（CPU 10ms/リクエスト制約。招待制でSEO不要という企画書11章の前提が、そのまま無償枠適合の根拠になる）
