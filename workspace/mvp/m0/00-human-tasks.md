@@ -12,7 +12,7 @@
 > | 済 | 内容 | 参照 |
 > |---|---|---|
 > | ✅ | H-07 のうち **squash-onlyマージ設定・Environments（staging / production＋必須レビュワー Kewton・`v*` タグポリシー）・Milestone M0〜M3・Label 5種** を適用済み。タグポリシーと Actions の read 権限は今回再確認 | [`00e-execution-status.md`](./00e-execution-status.md) |
-> | ✅ | H-07 の **main ブランチ保護を適用済み**（2026-09-12・初回push直後）。必須チェックは `lint-typecheck-unit`。`terraform-plan` は 02 完了後に追加する | [`scripts/protect-main.sh`](./scripts/protect-main.sh) |
+> | ✅ | H-07 の **main ブランチ保護を適用済み**（2026-09-12・初回push直後）。必須チェックは `lint-typecheck-unit`・`terraform-plan`・`pr-title`（2026-09-15 時点。経緯は `00e`） | [`scripts/protect-main.sh`](./scripts/protect-main.sh) |
 > | ✅ | H-12 の「所在・アクセス権の確認」完了。`pins/commandagent.json` プレースホルダ作成済み | [`00c-h12-commandagent.md`](./00c-h12-commandagent.md) |
 > | ⚠️ | H-04 の候補 **`musubi.app` は既に登録済み**。主要TLDは軒並み埋まっている | [`00d-h04-domain.md`](./00d-h04-domain.md) |
 > | 🚨 | H-05 の予備調査を実施。**結果は要対応。名称の継続可否（N-1）と一体で判断する** | 非公開リポジトリ `Kewton/Musubi-workspace` の `legal/` |

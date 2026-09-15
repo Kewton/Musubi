@@ -255,3 +255,13 @@ H-02のM3向けトークン最小化、H-09のM2向けpromotion_decision計測�
 - R2の `PutBucketVersioning` は未対応。stateは別キーに退避し、`02`でバックアップ・復元検証を実装する。現時点で復元検証は未実施。[Cloudflare R2 S3対応表](https://developers.cloudflare.com/r2/api/s3/api/)
 - GitHubのrequired reviewersはFree / Pro / Teamでpublic限定。[GitHub Environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments#required-reviewers)
 - タグのデプロイ制限は作成時に `type=tag` が必要。[GitHub Deployment branch policies API](https://docs.github.com/en/rest/deployments/branch-policies#create-a-deployment-branch-policy)
+
+## 2026-09-15 追記：`pr-title` を必須チェックに追加
+
+M0 受入試験の C-3（`update stuff` という規約違反のタイトルの PR #69）で、`pr-title` は失敗したがマージはブロックされなかった（mergeState UNSTABLE）。
+squash のコミットメッセージは PR タイトルなので、Conventional Commits を機械で強制できていなかった。所有者の判断で必須チェックに加えた。
+
+| 項目 | 値 |
+|---|---|
+| 必須チェック | `["lint-typecheck-unit", "terraform-plan", "pr-title"]`（strict） |
+| 注意 | PR のタイトルを直しただけでは ci.yml は再実行されない。直したら PR を閉じて開き直す |

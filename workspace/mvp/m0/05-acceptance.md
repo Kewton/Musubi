@@ -52,10 +52,10 @@
 
 | 項目 | 事前宣言（README §5） | 実測 | 判定 |
 |---|---|---|---|
-| 所要時間（①〜⑤） | ≤ 15分 | ___ 分（スクリプトの「合計（①〜⑤）」） | ☐ |
-| ダッシュボード操作回数 | **0回** | ___ 回 | ☐ |
-| 手で編集したファイル数 | **0件** | ___ 件（`infra:sync` が書き換えた `wrangler.jsonc` は数えない） | ☐ |
-| `smoke` の全チェック | 全 `ok` | ___（⑤ の `smoke: OK` の行） | ☐ |
+| 所要時間（①〜⑤） | ≤ 15分 | **32 秒**（2026-09-15・commit `a6aaff6`。空にする 1・destroy 3・apply 4・同期 2・build 2・配る 17・smoke 2 秒） | ✅ |
+| ダッシュボード操作回数 | **0回** | **0 回**（`reproduce-dev.sh` を1回実行しただけ） | ✅ |
+| 手で編集したファイル数 | **0件** | **0 件**（`infra:sync` が `packages/data-api/wrangler.jsonc` の env.dev の database_id を書き換え、後始末としてコミット） | ✅ |
+| `smoke` の全チェック | 全 `ok` | **全 ok**（host → gateway → data_api → d1 / r2 / do、version が `a6aaff6`） | ✅ |
 
 > **1回でも手作業が混ざったら未達。** 「今回だけダッシュボードで直した」を許すと、この試験は意味を失う。混ざったらその手作業をIssueにしてスクリプト化する。
 
@@ -82,13 +82,15 @@ pnpm smoke --env staging
 
 | 確認 | 方法 | 判定 |
 |---|---|---|
-| gateway が D1 に直接触れない | `apps/gateway/wrangler.jsonc` に `d1_databases` が**無い** | ☐ |
-| gateway が R2 に直接触れない | 同じく `r2_buckets` が**無い** | ☐ |
-| gateway が DO に直接触れない | 同じく `durable_objects` が**無い** | ☐ |
-| host が data-api に直接届かない | `apps/host/wrangler.jsonc` の `services` が `GATEWAY` のみ | ☐ |
-| data-api に外部ルートが無い | `workers_dev: false`（staging/prod）かつ `routes` 未設定 | ☐ |
-| lint が越境importを落とす | 意図的に `gateway` から `app-do` を import する一時PRを出し、CIが**落ちる**ことを確認 | ☐ |
+| gateway が D1 に直接触れない | `apps/gateway/wrangler.jsonc` に `d1_databases` が**無い** | ✅ トップ・3環境とも無い（2026-09-15） |
+| gateway が R2 に直接触れない | 同じく `r2_buckets` が**無い** | ✅ 同上 |
+| gateway が DO に直接触れない | 同じく `durable_objects` が**無い** | ✅ 同上 |
+| host が data-api に直接届かない | `apps/host/wrangler.jsonc` の `services` が `GATEWAY` のみ | ✅ 3環境とも `GATEWAY` のみ・トップに services 無し |
+| data-api に外部ルートが無い | `workers_dev: false`（staging/prod）かつ `routes` 未設定 | ✅ 設定はトップで `workers_dev: false`・routes 無し。実物も staging・production とも workers.dev と preview が無効（API で確認） |
+| lint が越境importを落とす | 意図的に `gateway` から `app-do` を import する一時PRを出し、CIが**落ちる**ことを確認 | ✅ PR #68：`pnpm lint` が `'@musubi/app-do' import is restricted` で失敗・マージはブロック。確認後に閉じた |
 
+> 冒頭の `pnpm smoke --env staging` は、deploy-staging の ③ として main へのマージのたびに通っている（初回は run 34820563532）。
+>
 > 最後の1行が重要。**「規約に書いてある」ではなく「破ると機械が止める」**を確認する。企画書12章「promptに書いただけのルールはいずれ破られる」と同じ理屈が、人間のコードにも当てはまる。
 
 ---
@@ -97,13 +99,13 @@ pnpm smoke --env staging
 
 | # | 手順 | 期待 | 判定 |
 |---|---|---|---|
-| C-1 | `main` へ直接 push を試みる | **拒否される** | ☐ |
-| C-2 | feature ブランチでPR作成 | `lint-typecheck-unit` / `terraform-plan` が走り green | ☐ |
-| C-3 | PRタイトルを規約違反にする（例：`update stuff`） | `pr-title` が**落ちる** | ☐ |
-| C-4 | 意図的に typecheck エラーを入れる | CIが**落ちる**・merge がブロックされる | ☐ |
-| C-5 | squash merge | staging へ自動デプロイ → smoke green | ☐ |
-| C-6 | `v0.0.1` タグ push | 🧑 **承認依頼が届く** | ☐ |
-| C-7 | 承認 | production へデプロイ → smoke green | ☐ |
+| C-1 | `main` へ直接 push を試みる | **拒否される** | ⚠️ **試さない**（2026-09-15 所有者の判断）。保護は API で確認：必須チェック・strict・線形履歴・force push 不可・削除不可・レビュー必須。ただし `enforce_admins: false` なので**管理者は迂回できる**。M3 着手時に true にする（`06` §5 B-1） |
+| C-2 | feature ブランチでPR作成 | `lint-typecheck-unit` / `terraform-plan` が走り green | ✅ M0 の通常の PR（#53〜#72。#68〜#70 は §2・C-3・C-4 の意図的な失敗）で毎回 green |
+| C-3 | PRタイトルを規約違反にする（例：`update stuff`） | `pr-title` が**落ちる** | ✅ PR #69 で失敗。**ただし `pr-title` が必須チェックではなく、マージはブロックされなかった**（mergeState UNSTABLE）→ 2026-09-15 に必須チェックへ加えた |
+| C-4 | 意図的に typecheck エラーを入れる | CIが**落ちる**・merge がブロックされる | ✅ PR #70：`pnpm typecheck` が TS2322 で失敗・mergeState BLOCKED。確認後に閉じた |
+| C-5 | squash merge | staging へ自動デプロイ → smoke green | ✅ #15 のマージ以降、毎回（初回 run 34820563532） |
+| C-6 | `v0.0.1` タグ push | 🧑 **承認依頼が届く** | ✅ `v0.1.0` で実施（04 §5 のタグ名に合わせた）。承認があるまでジョブが始まらなかった（run 34855227278） |
+| C-7 | 承認 | production へデプロイ → smoke green | ✅ `v0.1.0`（2026-09-14）・`v0.1.1`（2026-09-15） |
 | C-8 | `wrangler rollback`（または rollback.yml） | production が1つ前へ戻り smoke green | ✅ 2026-09-15：rollback.yml で v0.1.1 → v0.1.0（run 34914001211・切り替え 9 秒・smoke green。`docs/runbook/rollback.md` §4.2） |
 | C-9 | 再デプロイで復帰 | production が最新へ戻る | ✅ 2026-09-15：rollback.yml で v0.1.0 → v0.1.1 に戻した（run 34914211412・切り替え 9 秒・smoke green）。一次手段で復帰し、タグの再デプロイは不要だった |
 
@@ -111,8 +113,8 @@ pnpm smoke --env staging
 
 | 項目 | 事前宣言 | 実測 | 判定 |
 |---|---|---|---|
-| PR検査時間 | ≤ 5分 | ___ | ☐ |
-| main merge → staging smoke green | ≤ 10分 | ___ | ☐ |
+| PR検査時間 | ≤ 5分 | `lint-typecheck-unit` 1分14秒〜1分34秒（M0 後半の PR） | ✅ |
+| main merge → staging smoke green | ≤ 10分 | 63〜83 秒（deploy-staging の ④） | ✅ |
 | ロールバック所要時間（C-8） | 宣言なし → **ここで初期値を記録** | **承認から smoke green まで 47 秒**（うち切り替え 9 秒）。復帰は 45 秒 | 記録 |
 
 ---
@@ -157,11 +159,11 @@ pnpm smoke --env staging
 
 | 確認 | 判定 |
 |---|---|
-| Milestone `M0`〜`M3` が存在する | ☐ |
-| `M0` のIssueが全て closed（持ち越しは `M1` へ付け替え済み） | ☐ |
-| 全PRが `Closes #N` でIssueに紐づいている | ☐ |
-| Issueテンプレートに Milestone / DoD / 担当区分（🧑🤖）の欄がある | ☐ |
-| `human-only` ラベルの付いたIssueが、人間タスク（`00`）と一致している | ☐ |
+| Milestone `M0`〜`M3` が存在する | ✅ |
+| `M0` のIssueが全て closed（持ち越しは `M1` へ付け替え済み） | ✅ 本 Issue（#18）を除いて閉じた。持ち越し：#19・#20・#33 → M1、#23 → M2、#22 は保留（Milestone なし） |
+| 全PRが `Closes #N` でIssueに紐づいている | ❌ **未達**：マージ済み 36 本のうち 15 本に Closes が無い（Issue なしの監督側の変更 12 本・Refs だけの途中の PR 3 本）。処置は §6 |
+| Issueテンプレートに Milestone / DoD / 担当区分（🧑🤖）の欄がある | ✅ `.github/ISSUE_TEMPLATE/task.yml`（Milestone・担当区分・DoD・背景・依存） |
+| `human-only` ラベルの付いたIssueが、人間タスク（`00`）と一致している | ✅ #19（H-05）・#20（H-04）・#22（H-10・保留）・#23（H-11）・#28（CI トークンの絞り直し） |
 
 ---
 
@@ -171,46 +173,65 @@ M0を「基盤ができた」と言うために、**M1以降の自分が読む�
 
 | ファイル | 内容 | 判定 |
 |---|---|---|
-| `CLAUDE.md` | 不変条件・作業規律 | ☐ |
-| `docs/runbook/rollback.md` | コード／D1／Terraform の巻き戻し。**実演記録つき** | ☐ |
-| `docs/runbook/d1-migration.md` | 前方互換のみ・2段階リリース規律 | ☐ |
-| `docs/runbook/local-dev.md` | wrangler dev の確定手順と**3つの穴**の扱い | ☐ |
-| `infra/terraform/README.md` | 二層の境界表（何をTerraformが持たないか） | ☐ |
-| `pins/commandagent.json` | M1で使うピンのプレースホルダ＋形式の説明 | ☐ |
-| `workspace/mvp/m0/06-plan-and-limits.md` §8 | プラン清算が記入済み | ☐ |
+| `CLAUDE.md` | 不変条件・作業規律 | ✅ |
+| `docs/runbook/rollback.md` | コード／D1／Terraform の巻き戻し。**実演記録つき** | ✅ 実演記録つき（2026-09-15） |
+| `docs/runbook/d1-migration.md` | 前方互換のみ・2段階リリース規律 | ✅ |
+| `docs/runbook/local-dev.md` | wrangler dev の確定手順と**3つの穴**の扱い | ✅ |
+| `infra/terraform/README.md` | 二層の境界表（何をTerraformが持たないか） | ✅ |
+| `pins/commandagent.json` | M1で使うピンのプレースホルダ＋形式の説明 | ✅（tarball の SHA は M1 の #38） |
+| `workspace/mvp/m0/06-plan-and-limits.md` §8 | プラン清算が記入済み | ✅ |
 
 ---
 
 ## 6. 清算表（M0完了時に記入）
 
 ```
-M0 清算 — 記入日: ____-__-__
+M0 清算 — 記入日: 2026-09-15
 
 【事前宣言 vs 実測】
-  dev再現時間        宣言 ≤15分   実測 ____   判定 達成 / 未達
-  再現の手作業回数    宣言 0回     実測 ____   判定 達成 / 未達
-  PR検査時間         宣言 ≤5分    実測 ____   判定 達成 / 未達
-  main→staging      宣言 ≤10分   実測 ____   判定 達成 / 未達
-  月額インフラ費      宣言 $0      実測 $____  判定 達成 / 未達
-  最大CPU時間         宣言 <10ms   実測 ____   判定 達成 / 未達（余裕 ____ ms）
-  最大日次リクエスト   宣言 <50k    実測 ____   判定 達成 / 未達
+  dev再現時間        宣言 ≤15分   実測 32 秒                 判定 達成
+  再現の手作業回数    宣言 0回     実測 0 回                  判定 達成
+  PR検査時間         宣言 ≤5分    実測 1分14秒〜1分34秒      判定 達成
+  main→staging      宣言 ≤10分   実測 63〜83 秒             判定 達成
+  月額インフラ費      宣言 $0      実測 $0                    判定 達成（所有者が Billing で確認）
+  最大CPU時間         宣言 <10ms   実測 11.30 ms              判定 未達（production の初回デプロイ直後の1回。落ち着いた状態では単体の max 5.20 ms・余裕 4.80 ms。06 §8）
+  最大日次リクエスト   宣言 <50k    実測 217 req/日（①・staging。②は 30）  判定 達成
 
 【無償枠の確定事項（試験F）】
-  CPU時間           独立 / 合算
-  SB リクエスト      別カウント / されない  → 実効予算 ____ req/日
-  静的アセット       枠を消費する / しない
-  昇格トリガー抵触   なし / P-__ に抵触（対応: ____）
+  CPU時間           未確定（Analytics は Worker ごとに記録。上限の判定単位は一次情報に無い）
+  SB リクエスト      別カウント（Analytics 上）  → 実効予算 33,000 req/日で見積もる
+  静的アセット       枠を消費しない
+  昇格トリガー抵触   なし（P-1〜P-6。exceededResources は①②とも 0 件）
 
 【未達項目の処置】
-  - （項目）: 原因 ____ / 処置 ____ / Issue #__ / 送り先 M__
+  - 最大CPU時間: 原因 production を作った直後の最初のリクエストで data-api が単体 11.30 ms（エラーなし）。落ち着いた状態の再測では単体で割らない
+                  帰属 実装が悪いとも線が悪いとも決めない。線は「合算か独立か（F-1）」が未確定のまま引いてあり、合算の上界（3 Worker の max の和 9.36 ms）では余裕 0.64 ms
+                / 処置 昇格しない（2026-09-15 所有者の判断）。週次チェック（06 §5.1）で CPU 時間の max を見続け、F-1 が確定したとき・gateway に認可が入ったとき（M2）に測り直す。
+                  exceededResources が出たら P-1 として議論せず上げる / Issue なし（運用で見る） / 送り先 M2
+  - 全PRの Closes: 原因 マージ済み 36 本のうち 15 本。12 本は監督側（人と Claude）が運用文書・CI・orchestrate の設定を Issue なしで出した
+                  （#1・#29〜#31・#34・#39・#41〜#43・#45・#48・#71）。3 本は Issue を閉じない途中の PR で Refs を持つ（#60・#63・#64）
+                  帰属 線は妥当。監督側が「作業は必ず Issue から」（CLAUDE.md）を外した
+                / 処置（提案・🧑 所有者の確認待ち）M1 からは監督側の変更も Issue を立てる。途中の PR は「その Issue を閉じる PR が Closes を持つ」ことを条件に Refs を許す
+                  / Issue なし（運用） / 送り先 M1
 
 【M1へ持ち越したIssue】
-  - #__ ____（理由: ____）
+  - #19 商標・#20 ドメイン・#33 ゾーン委任（理由: 名称の扱いを M1 で決着させ、ドメインを取ってから改名する）
+  - #38 テンプレート tarball の SHA-256 の固定（理由: M1 の Form A で使う）
+  - #23 Google OAuth のクライアント（M2）、#22 LINE（保留）、#27 promotion_decision の計測（M2）、#28 CI トークンの絞り直し（M3）
 
 【M0で判明した想定外】
-  - ____
+  - アカウント②で R2 が未契約で、production の apply の前に契約が要った（旧記録は tfstate だけを見ていた）
+  - アカウント②の workers.dev のサブドメインが Worker 名から推測できる形で自動作成された → ランダムな名前へ作り直した
+  - wrangler deploy は配備後に workers.dev の URL を表示する → deploy-worker.ts で伏せた
+  - turbo が CLOUDFLARE_ENV を渡さず、キャッシュで host の配備用の設定が消える → host の turbo 設定で直した
+  - pr-title が必須チェックに入っていなかった → 加えた
+  - cmate-orchestrate の reverify が、外で解消したプロンプトの記録を信じて再判定しない（上流の不具合として記録）
+  - Google は LINE 内ブラウザ（埋め込み WebView）での OAuth を拒否する → M2 の設計に外部ブラウザへの移動を入れた
+  - 初回デプロイ直後の1回だけ CPU 時間が 10ms を超えた
+  - rollback と deploy-production は同じ concurrency の group で、待っていた実行が新しい実行に置き換えられて取り消される
+  - 名称の扱いを見直す必要が出た（中身は非公開の記録。M1 で決着）
 
-【M1着手可否】  可 / 不可（理由: ____）
+【M1着手可否】  可（条件: 🧑 M0 クローズの宣言と、M1 ゲートの事前宣言。§7）
 ```
 
 > **未達をそのまま通さない。** 達成できなかった項目は「なぜ線を外したのか／線が悪かったのか実装が悪かったのか」を分けて記録する。企画書17章の「較正の系譜（12系統）」——**モデルが主犯だった床は局所の数件のみで、大半は機械側の伝達・配線・強制の欠落だった**——と同じ帰属分析を、プラットフォーム側でも初回から始めておく。
@@ -224,5 +245,5 @@ M0 清算 — 記入日: ____-__-__
 - [ ] 試験A〜**F** が全項目パス
 - [ ] 清算表を記入し、未達項目の処置が決まっている
 - [ ] Milestone `M0` を close
-- [ ] タグ `v0.1.0` が production にデプロイされている
+- [x] タグ `v0.1.0` が production にデプロイされている（2026-09-14。現在は `v0.1.1`）
 - [ ] 🧑 **M1のゲートを事前宣言する**：「封緘済みgolden割り勘が staging のスマホで動く」の判定方法・判定者・期限を書き出す

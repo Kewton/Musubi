@@ -48,7 +48,7 @@
         {
           "binding": "CONTROL_DB",
           "database_name": "musubi-dev-control",
-          "database_id": "b8048247-19c6-4391-a7ff-b3f6e0b3cade",
+          "database_id": "abff398f-086b-4aa1-86c4-3ff571dd77a0",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
