@@ -137,9 +137,29 @@ terraform -chdir=infra/terraform/envs/<env> plan -detailed-exitcode   # exit 0
 **dev だけは「壊して直す」を日常化する。** staging / production では `terraform destroy` を
 実行しない。CI にも destroy ジョブを作らない（`02` §8）。
 
+**Worker まで含めて元に戻す（試験A。`05` §1）なら、1本のスクリプトで流す。** 段ごとの所要時間を出し、落ちた段で止まる。
+
 ```bash
-terraform destroy -auto-approve && terraform apply -auto-approve
+./infra/scripts/reproduce-dev.sh   # 空にする → destroy → apply → 同期 → build → 配る → smoke（リポジトリ直下の .env を読む）
 ```
+
+**Terraform の層だけを往復する**なら、§2 の資格情報を読み込んだシェルで、リポジトリ直下から：
+
+```bash
+pnpm infra:empty-buckets --env dev                                # R2 のオブジェクトを全部消す（下の「詰まりうる箇所」）
+terraform -chdir=infra/terraform/envs/dev destroy -auto-approve
+terraform -chdir=infra/terraform/envs/dev apply -auto-approve
+terraform -chdir=infra/terraform/envs/dev plan -detailed-exitcode # exit 0
+pnpm infra:sync --env dev                                         # D1 の database_id が変わる。§2 のとおりコミットする
+```
+
+`infra:empty-buckets` は §2 の `CLOUDFLARE_API_TOKEN`（Terraform 用トークン。`Workers R2 Storage: Edit` を含む）と
+`CLOUDFLARE_ACCOUNT_ID` で Cloudflare の API を呼ぶ。wrangler にはオブジェクトの一覧のコマンドが無く、R2 の S3 キーは
+tfstate のバケットに限ってあるため（`00` H-03）。**`--env dev` 以外は受け付けない。** 消す先は `packages/data-api/wrangler.jsonc` の
+`env.dev.r2_buckets`（BUNDLES・UPLOADS）で、名前が `<name_prefix>-dev-*` の形でなければ1つも消さない。件数だけを見るなら `--dry-run`。
+
+> 2026-09-13 の往復は `infra:empty-buckets` が無かったころのもので、`destroy && apply` を直接流した（下の表）。
+> いまは data-api の `/healthz` が BUNDLES に probe のオブジェクトを書くので、dev で貫通スモークを通した後はこの手順が要る。
 
 **2026-09-13（JST）の実測（Issue #2 の DoD）**
 
@@ -167,7 +187,7 @@ terraform destroy -auto-approve && terraform apply -auto-approve
 
 | 資源 | 詰まり方 | 対処 |
 |---|---|---|
-| R2 bucket | オブジェクトが残っていると destroy が失敗する。provider v5 に `force_destroy` 相当は**無い** | destroy 前に空にする。空バケットでの destroy は実測で成功 |
+| R2 bucket | オブジェクトが残っていると destroy が失敗する。provider v5 に `force_destroy` 相当は**無い**。data-api の `/healthz` は BUNDLES に probe のオブジェクトを書くので、dev で smoke を通した後は必ず空でない | destroy 前に `pnpm infra:empty-buckets --env dev` で空にする（`reproduce-dev.sh` の ①）。空バケットでの destroy は実測で成功 |
 | Queue | consumer が残っていると削除できない | Worker を先に消す。`deploy` → `destroy` の順を守る |
 | Durable Object | Terraform 管理外。クラス削除には `deleted_classes` migration が要る | wrangler 側（`03` §4） |
 

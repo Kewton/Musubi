@@ -14,6 +14,10 @@
 //   6. production の資格情報（production 環境の Secret）に届くのは deploy-production.yml と rollback.yml だけ。staging のワークフローからは届かない
 //   7. 巻き戻し（--rollback-to・Issue #17）：版の JSON の読み方、切り替え先と順の決め方、偽の wrangler で読む → 切り替える → 確かめる、
 //      実物の wrangler が呼び方を受け付けること（資格情報を渡さず、認証の手前で止まる）、rollback.yml の形
+//   8. dev の貫通スモーク（--smoke・Issue #67）：偽の fetch で、サブドメインを読んで host のオリジンを組み立て、smoke の判定に渡す。
+//      宛先・サブドメイン・トークンを出さない。dev 以外・production のアカウントは API を呼ばずに止める
+//   9. reproduce-dev.sh（試験A・Issue #67）：偽の terraform と pnpm を PATH の先頭に置いて流す。段の並び、段ごとの資格情報の渡し方
+//      （production の資格情報はどの段にも届かない）、出力に値が出ないこと、落ちたらそこで止まること、所要時間を出すこと
 //
 // fixture の値は全部作り物で、他と衝突しない目印にしてある。出力に目印が1つでも混ざったら「伏せ損ねた」と判定する。
 import { spawnSync } from "node:child_process";
@@ -29,17 +33,20 @@ import {
   EXIT_NG,
   EXIT_OK,
   failureLines,
+  hostOrigin,
   matchesSha,
   MIGRATION_CONFIG,
   MIGRATION_DATABASE,
   neutralize,
   parseCurrentVersion,
+  parseSubdomain,
   parseVersionDetail,
   parseVersionList,
   planRollback,
   PROBE_TARGETS,
   PROBE_TOKEN_MIN_LENGTH,
   PROBE_TOKEN_SECRET,
+  readApiCredentials,
   readCall,
   readSecrets,
   redact,
@@ -51,6 +58,7 @@ import {
   rollbackCall,
   runCli,
   secretsFor,
+  SMOKE_ENVS,
   summarize,
   SWITCH_ORDER,
   TARGETS,
@@ -64,7 +72,7 @@ import {
   type WorkerTarget,
   type WorkerVersions,
 } from "./deploy-worker.ts";
-import { probeToken } from "./smoke.ts";
+import { healthzUrl, PROBE_HEADER, PROBE_REQUIRED_ENVS, probeToken, PROBE_TOKEN_ENV, type RetryPolicy } from "./smoke.ts";
 import { ENVS, findTargets } from "./sync-bindings.ts";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -531,6 +539,36 @@ describe("CLI：wrangler の出力をファイルに受けてから出す", () =
       expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.DATA_API \(musubi-staging-data-api\)\s+Worker/));
       // --var で渡した GIT_SHA は設定の "local" を上書きし、wrangler は値を伏せて表示する
       expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.GIT_SHA \("\(hidden\)"\)\s+Environment Variable/));
+    },
+    60_000,
+  );
+
+  // dev へ配る（reproduce-dev.sh の ④。試験A）。host は vite build の出力を配るので、ここでは build の要らない2つを見る
+  it.each([
+    ["data-api", /^ {2}env\.BUNDLES \(musubi-dev-bundles\)\s+R2 Bucket/],
+    ["gateway", /^ {2}env\.DATA_API \(musubi-dev-data-api\)\s+Worker/],
+  ] as const)(
+    "実物の wrangler（--dry-run）で dev の %s も同じ形で配れ、要約が dev の binding を拾う。secret は載せない",
+    async (target, binding) => {
+      const bin = join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
+      const dryRun = join(dir, "dry-run-wrangler-dev.mjs");
+      writeFileSync(
+        dryRun,
+        [
+          'import { spawnSync } from "node:child_process";',
+          "const result = spawnSync(process.execPath, [process.env.REAL_WRANGLER, ...process.argv.slice(2), '--dry-run'], { stdio: 'inherit' });",
+          "process.exitCode = result.status ?? 1;",
+        ].join("\n"),
+      );
+      const run = await deployWorker(["--env", "dev", "--target", target, "--sha", SHA], {}, {
+        wrangler: [process.execPath, dryRun],
+        env: { PATH: process.env["PATH"], HOME: dir, WRANGLER_SEND_METRICS: "false", REAL_WRANGLER: bin, [PROBE_TOKEN_SECRET]: PROBE_TOKEN },
+      });
+      expect(run.code, run.all).toBe(EXIT_OK);
+      expect(run.out[0]).toBe(`deploy-worker: ${target}（env=dev）: wrangler deploy --env dev --var GIT_SHA:${SHA}（${WORKER_DIRS[target]}）`);
+      expect(run.out).toContainEqual(expect.stringMatching(binding));
+      expect(run.out).toContainEqual(expect.stringMatching(/^ {2}env\.GIT_SHA \("\(hidden\)"\)\s+Environment Variable/));
+      expectRedacted(run.all);
     },
     60_000,
   );
@@ -1754,5 +1792,478 @@ describe("rollback.yml", () => {
       expect(preflight).toContain(`HAS_${secret}: \${{ secrets.${secret} != '' }}`);
     }
     expect(passes({ body: preflight }, "[A-Z0-9_]+")).toBe(false);
+  });
+});
+
+// ── 8. dev の貫通スモーク（--smoke）────────────────────────────────────────────────
+
+describe("--smoke：dev の宛先を組み立てて smoke に渡す（偽の fetch）", () => {
+  /** 目印。CI 用トークンの代わり */
+  const API_TOKEN = "fixture-ci-token-2f7c9e1b";
+  const HOSTNAME = `musubi-dev-host.${SUBDOMAIN}.workers.dev`;
+  const SUBDOMAIN_API = `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT_ID_HEX}/workers/subdomain`;
+  const FAST: RetryPolicy = { maxAttempts: 3, retryIntervalMs: 10, requestTimeoutMs: 1_000, deadlineMs: 10_000 };
+  const CREDENTIALS = { CLOUDFLARE_API_TOKEN: API_TOKEN, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID_HEX, CLOUDFLARE_ACCOUNT_ID_PROD: "1a2b3c4d5e6f708192a3b4c5d6e7f809" };
+  const healthy = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    service: "host",
+    env: "dev",
+    version: SHA,
+    checks: { gateway: "ok", data_api: "ok", d1: "ok", r2: "ok", do: "ok" },
+    elapsed_ms: 12.5,
+    ...overrides,
+  });
+
+  interface SmokeRun {
+    code: number;
+    out: string[];
+    all: string;
+    /** 呼ばれた URL（Cloudflare の API と host の /healthz） */
+    urls: string[];
+    /** /healthz に付いたヘッダ */
+    healthzHeaders: Headers[];
+  }
+
+  async function smoke(
+    argv: readonly string[],
+    options: { env?: Record<string, string | undefined>; subdomain?: () => Response; healthz?: () => Response; unreachable?: boolean } = {},
+  ): Promise<SmokeRun> {
+    const out: string[] = [];
+    const err: string[] = [];
+    const urls: string[] = [];
+    const healthzHeaders: Headers[] = [];
+    let now = 0;
+    const exit = await runCli(argv, {
+      root: ROOT,
+      // 起動されたら落ちる wrangler（--smoke は wrangler を使わない）
+      wrangler: [join(tmpdir(), "deploy-worker-test-no-such-wrangler")],
+      env: options.env ?? { ...CREDENTIALS, [PROBE_TOKEN_ENV]: PROBE_TOKEN, SMOKE_BASE_URL: "https://fixture-wrong-origin.example" },
+      out: (line) => out.push(line),
+      err: (line) => err.push(line),
+      fetch: async (input, init) => {
+        const url = String(input);
+        urls.push(url);
+        if (options.unreachable === true) {
+          throw Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(`connect ECONNREFUSED ${url}`), { code: "ECONNREFUSED" }) });
+        }
+        if (url === SUBDOMAIN_API) {
+          expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${API_TOKEN}`);
+          return options.subdomain?.() ?? Response.json({ success: true, errors: [], messages: [], result: { subdomain: SUBDOMAIN } });
+        }
+        if (url === `https://${HOSTNAME}/healthz`) {
+          healthzHeaders.push(new Headers(init?.headers));
+          return options.healthz?.() ?? Response.json(healthy());
+        }
+        throw new Error(`想定外の宛先: ${url}`);
+      },
+      smoke: {
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        policy: FAST,
+      },
+    });
+    return { code: exit, out, all: [...out, ...err].join("\n"), urls, healthzHeaders };
+  }
+
+  function expectNothingSecret(run: SmokeRun): void {
+    expectRedacted(run.all);
+    for (const secret of [API_TOKEN, HOSTNAME, "https://", "fixture-wrong-origin"]) expect(run.all).not.toContain(secret);
+  }
+
+  it("--smoke で組み立ててよい env は dev だけ。dev の host は X-Musubi-Probe が無くても詳細を返す", () => {
+    expect(SMOKE_ENVS).toEqual(["dev"]);
+    for (const env of SMOKE_ENVS) expect(PROBE_REQUIRED_ENVS).not.toContain(env);
+  });
+
+  it("host の Worker 名とサブドメインから作るオリジンは、smoke が SMOKE_BASE_URL として受け付ける形", () => {
+    const origin = hostOrigin(workerName(ROOT, "host", "dev"), SUBDOMAIN);
+    expect(healthzUrl(origin, "SMOKE_BASE_URL").href).toBe(`https://${HOSTNAME}/healthz`);
+  });
+
+  it("サブドメインの応答：DNS のラベルだけを受け付け、値は出さない", () => {
+    expect(parseSubdomain({ success: true, result: { subdomain: "Fixture-Sub-1" } })).toBe("fixture-sub-1");
+    for (const body of [{ success: false, result: { subdomain: SUBDOMAIN } }, { success: true, result: { subdomain: `${SUBDOMAIN}.evil/x` } }, { success: true, result: {} }, "x"]) {
+      expect(() => parseSubdomain(body)).toThrow("Workers のサブドメインが読めない");
+    }
+  });
+
+  it("資格情報：production のアカウント・Account ID の形でない値は止める。値は出さない", () => {
+    expect(readApiCredentials(CREDENTIALS)).toEqual({ token: API_TOKEN, accountId: ACCOUNT_ID_HEX });
+    expect(() => readApiCredentials({ ...CREDENTIALS, CLOUDFLARE_ACCOUNT_ID_PROD: ACCOUNT_ID_HEX.toUpperCase() })).toThrow("production のアカウント");
+    expect(() => readApiCredentials({ ...CREDENTIALS, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID })).toThrow("Account ID の形");
+    expect(() => readApiCredentials({ CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID_HEX })).toThrow("CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID が要る");
+  });
+
+  it("成功：サブドメインを読み、host の /healthz を1回叩いて全層 ok なら exit 0。宛先は出さず、SMOKE_PROBE_TOKEN を dev の host に送らない", async () => {
+    const run = await smoke(["--env", "dev", "--smoke", "--sha", SHA]);
+    expect(run.code, run.all).toBe(EXIT_OK);
+    expect(run.urls).toEqual([SUBDOMAIN_API, `https://${HOSTNAME}/healthz`]);
+    expect(run.healthzHeaders[0]?.get(PROBE_HEADER)).toBeNull();
+    expect(run.out[0]).toBe("deploy-worker: smoke（env=dev）: 宛先は host（musubi-dev-host）の workers.dev のオリジン。Cloudflare の API で読んだサブドメインから組み立て、表示しない");
+    expect(run.out).toContain(`smoke: GET /healthz（env=dev, expect-sha=${SHA}）`);
+    expect(run.out).toContainEqual(expect.stringMatching(/^smoke: OK {2}host → gateway → data_api → d1 \/ r2 \/ do/));
+    expect(run.out.at(-1)).toBe("deploy-worker: OK  smoke（env=dev）");
+    expectNothingSecret(run);
+  });
+
+  it("smoke が NG（checks の r2 が ng）なら exit 1。smoke の判定をそのまま出す", async () => {
+    const broken = healthy({ checks: { gateway: "ok", data_api: "ok", d1: "ok", r2: "ng: R2 unreachable", do: "ok" } });
+    const run = await smoke(["--env", "dev", "--smoke"], { healthz: () => Response.json(broken, { status: 503 }) });
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.out).toContainEqual(expect.stringMatching(/^smoke: NG \[r2\] /));
+    expect(run.out.at(-1)).toBe("deploy-worker: NG  smoke（env=dev）");
+    expectNothingSecret(run);
+  });
+
+  it("--sha が配った版と違えば exit 1（--expect-sha として照合する）", async () => {
+    const run = await smoke(["--env", "dev", "--smoke", "--sha", "fedcba9"]);
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.all).toContain("version が --expect-sha と一致しない");
+  });
+
+  it.each([
+    ["staging", ["--env", "staging", "--smoke"], "--smoke は dev だけ。staging の宛先は CI の staging 環境の Secret SMOKE_BASE_URL"],
+    ["production", ["--env", "production", "--smoke"], "--smoke は dev だけ。production の宛先は CI の production 環境の Secret SMOKE_BASE_URL"],
+    ["--target と一緒", ["--env", "dev", "--smoke", "--target", "host", "--sha", SHA], "--smoke は --target・--rollback-to と一緒に使わない"],
+    ["--rollback-to と一緒", ["--env", "dev", "--smoke", "--rollback-to", SHA], "--smoke は --target・--rollback-to と一緒に使わない"],
+    ["--sha が SHA でない（値を出さない）", ["--env", "dev", "--smoke", "--sha", SUBDOMAIN], "--sha は 7〜40 桁の 16 進"],
+  ])("%s は API を呼ばずに exit 1", async (_, argv, message) => {
+    const run = await smoke(argv);
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.urls).toEqual([]);
+    expect(run.all).toContain(`deploy-worker: ${message}`);
+    expectNothingSecret(run);
+  });
+
+  it.each([
+    ["資格情報が無い", {}, "CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID が要る"],
+    ["production のアカウント", { ...CREDENTIALS, CLOUDFLARE_ACCOUNT_ID_PROD: ACCOUNT_ID_HEX }, "production のアカウント"],
+  ])("%s なら API を呼ばずに exit 1", async (_, env, message) => {
+    const run = await smoke(["--env", "dev", "--smoke"], { env });
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.urls).toEqual([]);
+    expect(run.all).toContain(message);
+    expectNothingSecret(run);
+  });
+
+  it.each([
+    ["権限が無い（403）", () => Response.json({ success: false, errors: [{ code: 10000, message: `denied ${ACCOUNT_ID_HEX}` }] }, { status: 403 }), "Workers のサブドメインを読む権限が無い（HTTP 403）"],
+    ["サブドメインが無い", () => Response.json({ success: true, result: { subdomain: null } }), "Workers のサブドメインが読めない"],
+    ["JSON でない", () => new Response(`<html>${SUBDOMAIN}</html>`, { status: 502 }), "応答が JSON でない（HTTP 502）"],
+  ])("サブドメインが読めない（%s）なら、host を叩かずに exit 1", async (_, subdomain, message) => {
+    const run = await smoke(["--env", "dev", "--smoke"], { subdomain });
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.urls).toEqual([SUBDOMAIN_API]);
+    expect(run.all).toContain(message);
+    expectNothingSecret(run);
+  });
+
+  it("Cloudflare の API に届かなければ、URL を出さずに exit 1", async () => {
+    const run = await smoke(["--env", "dev", "--smoke"], { unreachable: true });
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.all).toContain("Cloudflare の API に届かない（ECONNREFUSED）");
+    expectNothingSecret(run);
+  });
+});
+
+// ── 9. reproduce-dev.sh（試験A）────────────────────────────────────────────────────
+
+describe("reproduce-dev.sh：試験A の ①〜⑤ を1本で流す（偽の terraform と pnpm）", () => {
+  const SCRIPT = join(ROOT, "infra/scripts/reproduce-dev.sh");
+  const HEAD = spawnSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).stdout.trim();
+  const TF_VERSION = readFileSync(join(ROOT, ".terraform-version"), "utf8").trim();
+  const PROD_ACCOUNT_HEX = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
+
+  /** .env の形の目印。production の資格情報も混ぜ、どの段にも届かないことを見る */
+  const CREDENTIALS: Readonly<Record<string, string>> = {
+    CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID_HEX,
+    CLOUDFLARE_ACCOUNT_ID_PROD: PROD_ACCOUNT_HEX,
+    TF_CLOUDFLARE_API_TOKEN: "fixture-tf-token-8c1d4e",
+    CLOUDFLARE_API_TOKEN: "fixture-ci-token-3b7a9f",
+    TF_CLOUDFLARE_API_TOKEN_PROD: "fixture-tf-prod-token-5e2c",
+    CLOUDFLARE_API_TOKEN_PROD: "fixture-ci-prod-token-9a4b",
+    MUSUBI_PROBE_TOKEN_PROD: PROBE_TOKEN,
+    R2_ACCESS_KEY_ID: "fixture-r2-key-6d0e2a",
+    R2_SECRET_ACCESS_KEY: "fixture-r2-secret-1f8b3c",
+    R2_S3_ENDPOINT: `https://${ACCOUNT_ID_HEX}.r2.cloudflarestorage.com`,
+    TFSTATE_BUCKET: "musubi-tfstate",
+  };
+  /** 手元のシェルに残っていそうな値。どの段にも届かないはず */
+  const STRAY_ENV: Readonly<Record<string, string>> = {
+    MUSUBI_PROBE_TOKEN: "fixture-stray-probe-token-47d1",
+    SMOKE_PROBE_TOKEN: "fixture-stray-smoke-token-8b2e",
+    SMOKE_BASE_URL: `https://musubi-production-host.${SUBDOMAIN}.workers.dev`,
+    AWS_SESSION_TOKEN: "fixture-stray-aws-session-3c9f",
+    CLOUDFLARE_ENV: "production",
+    TF_VAR_account_id_prod: PROD_ACCOUNT_HEX,
+  };
+  const SECRET_VALUES = [...Object.values(CREDENTIALS).filter((v) => v !== "musubi-tfstate"), ...Object.values(STRAY_ENV).filter((v) => v !== "production")];
+
+  interface ScriptCall {
+    readonly cmd: "terraform" | "pnpm";
+    readonly args: readonly string[];
+    /** 資格情報の形の環境変数（FAKE_* を除く）と CLOUDFLARE_ENV */
+    readonly env: Readonly<Record<string, string>>;
+  }
+
+  interface ScriptRun {
+    readonly code: number | null;
+    readonly stdout: string;
+    readonly stderr: string;
+    readonly all: string;
+    readonly calls: readonly ScriptCall[];
+  }
+
+  let dir: string;
+  let bin: string;
+  let seq = 0;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "reproduce-dev-test-"));
+    bin = join(dir, "bin");
+    mkdirSync(bin);
+    // 受けた引数と、資格情報の形の環境変数を記録する（値は作り物）
+    const record = [
+      "#!/usr/bin/env node",
+      'const { appendFileSync } = require("node:fs");',
+      "const args = process.argv.slice(2);",
+      "const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('FAKE_') && /TOKEN|SECRET|ACCOUNT|^AWS_|^TF_VAR_|^R2_|^SMOKE_|^MUSUBI_|^CLOUDFLARE_/.test(k)));",
+      "appendFileSync(process.env.FAKE_RECORD, JSON.stringify({ cmd: require('node:path').basename(process.argv[1]), args, env }) + '\\n');",
+      "const out = (s) => process.stdout.write(s + '\\n');",
+      "const { FAKE_ACCOUNT: ACC, FAKE_SUB: SUB } = process.env;",
+    ];
+    writeFileSync(
+      join(bin, "terraform"),
+      [
+        ...record,
+        "const sub = args.find((a) => !a.startsWith('-'));",
+        "if (sub === 'version') { out(`Terraform v${process.env.FAKE_TF_VERSION}`); out('on linux_amd64'); }",
+        "if (sub === 'init') { out('Initializing the backend...'); out(`Successfully configured the backend \"s3\" (https://${ACC}.r2.cloudflarestorage.com)`); out('Terraform has been successfully initialized!'); }",
+        "if (sub === 'destroy') { out('module.env.cloudflare_d1_database.control: Destroying... [id=0f6c9f7e-1a2b-4c3d-8e9f-0123456789ab]'); out('module.env.cloudflare_d1_database.control: Destruction complete after 1s'); out('Destroy complete! Resources: 5 destroyed.'); }",
+        "if (sub === 'apply') { out(`module.env.cloudflare_queue.build: Creation complete after 1s [id=${ACC}]`); out('Apply complete! Resources: 5 added, 0 changed, 0 destroyed.'); }",
+        "if (sub === 'plan' && process.env.FAKE_PLAN_EXIT === '2') { out('  # module.env.cloudflare_d1_database.control will be updated in-place'); out(`      account_id = \"${ACC}\"`); out('Plan: 0 to add, 1 to change, 0 to destroy.'); process.exitCode = 2; }",
+        "else if (sub === 'plan') { out('No changes. Your infrastructure matches the configuration.'); }",
+        "if (process.env.FAKE_TF_FAIL === sub) { process.stderr.write(`Error: deleting /accounts/${ACC}/d1/database failed; see https://musubi-dev-host.${SUB}.workers.dev\\n`); process.exitCode = 1; }",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      join(bin, "pnpm"),
+      [
+        ...record,
+        "if (args[0] === 'build') { out(`> musubi@ build ${process.cwd()}`); out(' Tasks:    11 successful, 11 total'); out('Cached:    9 cached, 11 total'); out('  Time:    5.778s'); }",
+        "else { out(`fake: ${args.slice(2).join(' ')}`); }",
+        "if (process.env.FAKE_PNPM_FAIL && args.join(' ').includes(process.env.FAKE_PNPM_FAIL)) { process.stderr.write(`fake failure at https://musubi-dev-host.${SUB}.workers.dev\\n`); process.exitCode = 1; }",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function reproduce(
+    options: { envFile?: Readonly<Record<string, string>> | null; args?: readonly string[]; env?: Readonly<Record<string, string>> } = {},
+  ): ScriptRun {
+    const n = ++seq;
+    const recordPath = join(dir, `record-${n}.jsonl`);
+    const envFile = join(dir, `env-${n}`);
+    const lines = Object.entries(options.envFile === undefined ? CREDENTIALS : (options.envFile ?? {})).map(([k, v]) => `${k}=${v}`);
+    writeFileSync(envFile, `${lines.join("\n")}\n`);
+    const result = spawnSync("bash", [SCRIPT, ...(options.args ?? ["--env-file", envFile])], {
+      cwd: dir,
+      env: {
+        PATH: `${bin}:${process.env["PATH"] ?? ""}`,
+        HOME: dir,
+        TMPDIR: dir,
+        FAKE_RECORD: recordPath,
+        FAKE_TF_VERSION: TF_VERSION,
+        FAKE_ACCOUNT: ACCOUNT_ID_HEX,
+        FAKE_SUB: SUBDOMAIN,
+        ...STRAY_ENV,
+        ...options.env,
+      },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const calls = existsSync(recordPath)
+      ? readFileSync(recordPath, "utf8")
+          .split("\n")
+          .filter((line) => line !== "")
+          .map((line) => JSON.parse(line) as ScriptCall)
+      : [];
+    return { code: result.status, stdout: result.stdout, stderr: result.stderr, all: `${result.stdout}${result.stderr}`, calls };
+  }
+
+  /** 引数のリポジトリのパスとログの置き場を置き換えた、呼び出しの1行 */
+  const shown = (call: ScriptCall): string =>
+    `${call.cmd} ${call.args.join(" ")}`
+      .replaceAll(realpathSync(ROOT), "<root>")
+      .replaceAll(ROOT, "<root>")
+      .replace(/\S*\/reproduce-dev\.[A-Za-z0-9]+/g, "<logs>");
+
+  function expectNothingSecret(run: ScriptRun): void {
+    for (const value of SECRET_VALUES) expect(run.all).not.toContain(value);
+    // commit の SHA（40 桁）は出してよい。Account ID の形（ちょうど 32 桁）だけを見る
+    expect(run.all).not.toMatch(/\b[0-9a-f]{32}\b/i);
+    expect(run.all).not.toMatch(/[a-z0-9_-]+\.workers\.dev/i);
+    expect(run.all).not.toContain("[id=");
+  }
+
+  const TF = "terraform -chdir=<root>/infra/terraform/envs/dev";
+  const DEPLOY = "pnpm exec tsx infra/scripts/deploy-worker.ts --env dev";
+  const EXPECTED_CALLS = [
+    "terraform version",
+    "pnpm exec tsx infra/scripts/empty-buckets.ts --env dev",
+    `${TF} init -input=false -lockfile=readonly -no-color`,
+    `${TF} destroy -auto-approve -input=false -no-color`,
+    `${TF} apply -auto-approve -input=false -no-color`,
+    `${TF} plan -detailed-exitcode -input=false -lock=false -no-color`,
+    "pnpm exec tsx infra/scripts/sync-bindings.ts --env dev",
+    "pnpm exec tsx infra/scripts/sync-bindings.ts --env dev --check",
+    "pnpm build",
+    `${DEPLOY} --target migrate --log-dir <logs>`,
+    `${DEPLOY} --target data-api --sha ${HEAD} --log-dir <logs>`,
+    `${DEPLOY} --target gateway --sha ${HEAD} --log-dir <logs>`,
+    `${DEPLOY} --target host --sha ${HEAD} --log-dir <logs>`,
+    `${DEPLOY} --smoke --sha ${HEAD}`,
+  ];
+
+  it("成功：空にする → destroy → apply → 同期 → build → 配る → smoke の順に1回ずつ呼び、所要時間を出して exit 0", () => {
+    const run = reproduce();
+    expect(run.code, run.all).toBe(0);
+    expect(run.calls.map(shown)).toEqual(EXPECTED_CALLS);
+
+    for (const label of ["① 空にする（R2）", "① 消す（terraform destroy）", "② 作り直す（terraform apply）", "③ 同期（infra:sync）", "④ build（CLOUDFLARE_ENV=dev）", "④ 配る（migrate → data-api → gateway → host）", "⑤ 貫通スモーク"]) {
+      expect(run.stdout).toContain(`reproduce-dev: ── ${label} ──`);
+      expect(run.stdout).toMatch(new RegExp(`^ {2}${label.replace(/[()（）→]/g, ".")}: \\d+ 秒$`, "m"));
+    }
+    expect(run.stdout).toMatch(/^reproduce-dev: 合計（①〜⑤）: \d+ 秒（\d+ 分 \d\d 秒）。宣言した線 900 秒（15 分）以内$/m);
+    // terraform と build は要約の行だけ（[id=…] を外し、backend の endpoint を含む init の行は出さない）
+    expect(run.stdout).toContain("  module.env.cloudflare_d1_database.control: Destruction complete after 1s");
+    expect(run.stdout).toContain("  Destroy complete! Resources: 5 destroyed.");
+    expect(run.stdout).toContain("  module.env.cloudflare_queue.build: Creation complete after 1s");
+    expect(run.stdout).toContain("  apply の後の plan: No changes（exit 0）");
+    expect(run.stdout).toContain("   Tasks:    11 successful, 11 total");
+    expect(run.stdout).not.toContain("Successfully configured the backend");
+    expect(run.stdout).not.toContain("> musubi@ build");
+    expect(run.stdout.trimEnd().split("\n").at(-1)).toBe(`reproduce-dev: OK  dev を消して作り直し、貫通スモークが通った（commit ${HEAD}）`);
+    expectNothingSecret(run);
+  });
+
+  it("資格情報は、段ごとに要るものだけを渡す。production の資格情報と、手元のシェルに残った値はどの段にも届かない", () => {
+    const run = reproduce();
+    expect(run.code, run.all).toBe(0);
+    const account = { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID_HEX, CLOUDFLARE_ACCOUNT_ID_PROD: PROD_ACCOUNT_HEX };
+    const backend = {
+      AWS_ACCESS_KEY_ID: CREDENTIALS["R2_ACCESS_KEY_ID"],
+      AWS_SECRET_ACCESS_KEY: CREDENTIALS["R2_SECRET_ACCESS_KEY"],
+      AWS_ENDPOINT_URL_S3: CREDENTIALS["R2_S3_ENDPOINT"],
+    };
+    const expected = (line: string): Record<string, string | undefined> => {
+      if (line === "terraform version") return {};
+      if (line.includes("empty-buckets.ts")) return { CLOUDFLARE_API_TOKEN: CREDENTIALS["TF_CLOUDFLARE_API_TOKEN"], ...account };
+      if (line.startsWith("terraform ")) return { CLOUDFLARE_API_TOKEN: CREDENTIALS["TF_CLOUDFLARE_API_TOKEN"], TF_VAR_account_id: ACCOUNT_ID_HEX, ...backend };
+      if (line.includes("sync-bindings.ts")) return backend;
+      if (line === "pnpm build") return { CLOUDFLARE_ENV: "dev" };
+      if (line.includes("deploy-worker.ts")) return { CLOUDFLARE_API_TOKEN: CREDENTIALS["CLOUDFLARE_API_TOKEN"], ...account };
+      throw new Error(`想定外の呼び出し: ${line}`);
+    };
+    for (const call of run.calls) expect(call.env, shown(call)).toEqual(expected(shown(call)));
+  });
+
+  it("既定の .env が無くても、今のシェルの環境変数から読める（--env-file に空のファイル）", () => {
+    const run = reproduce({ envFile: null, env: CREDENTIALS });
+    expect(run.code, run.all).toBe(0);
+    expect(run.calls.map(shown)).toEqual(EXPECTED_CALLS);
+    const deploy = run.calls.find((call) => call.args.includes("--smoke"));
+    expect(deploy?.env).toEqual({ CLOUDFLARE_API_TOKEN: CREDENTIALS["CLOUDFLARE_API_TOKEN"], CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID_HEX, CLOUDFLARE_ACCOUNT_ID_PROD: PROD_ACCOUNT_HEX });
+  });
+
+  it("destroy が落ちたら、そこで止めて exit 1。伏せた全文と、そこまでの所要時間を出す", () => {
+    const run = reproduce({ env: { FAKE_TF_FAIL: "destroy" } });
+    expect(run.code).toBe(1);
+    expect(run.calls.map(shown)).toEqual(EXPECTED_CALLS.slice(0, 4));
+    expect(run.stderr).toContain("  Error: deleting /accounts/<REDACTED>/d1/database failed; see https://<REDACTED>.workers.dev");
+    expect(run.stderr).toMatch(/reproduce-dev: NG {2}① 消す（terraform destroy） で止まった（exit 1）。①から \d+ 分 \d\d 秒。ログ: /);
+    expect(run.stdout).toMatch(/^ {2}① 消す.terraform destroy.: \d+ 秒$/m);
+    expect(run.stdout).not.toContain("② 作り直す");
+    expectNothingSecret(run);
+  });
+
+  it("apply の後の plan に差分があれば、リソースのアドレスと Plan の行だけを出して止める（属性値は出さない）", () => {
+    const run = reproduce({ env: { FAKE_PLAN_EXIT: "2" } });
+    expect(run.code).toBe(1);
+    expect(run.calls.map(shown)).toEqual(EXPECTED_CALLS.slice(0, 6));
+    expect(run.stderr).toContain("    # module.env.cloudflare_d1_database.control will be updated in-place");
+    expect(run.stderr).toContain("  Plan: 0 to add, 1 to change, 0 to destroy.");
+    expect(run.stderr).not.toContain("account_id =");
+    expect(run.stderr).toContain("② 作り直す（terraform apply） で止まった");
+    expectNothingSecret(run);
+  });
+
+  it.each([
+    ["空にする", "empty-buckets.ts", 2, "① 空にする（R2）"],
+    ["同期の --check", "--check", 8, "③ 同期（infra:sync）"],
+    ["host の配備", "--target host", 13, "④ 配る（migrate → data-api → gateway → host）"],
+    ["smoke", "--smoke", 14, "⑤ 貫通スモーク"],
+  ])("%s が落ちたら、そこで止めて exit 1", (_, failAt, calls, label) => {
+    const run = reproduce({ env: { FAKE_PNPM_FAIL: failAt } });
+    expect(run.code).toBe(1);
+    expect(run.calls.map(shown)).toEqual(EXPECTED_CALLS.slice(0, calls));
+    expect(run.stderr).toContain(`reproduce-dev: NG  ${label} で止まった（exit 1）`);
+    expect(run.stdout).not.toMatch(/合計（①〜⑤）/);
+  });
+
+  it("build が落ちたら、伏せた全文を出して止める", () => {
+    const run = reproduce({ env: { FAKE_PNPM_FAIL: "build" } });
+    expect(run.code).toBe(1);
+    expect(run.calls.map(shown)).toEqual(EXPECTED_CALLS.slice(0, 9));
+    expect(run.stderr).toContain("  fake failure at https://<REDACTED>.workers.dev");
+    expectNothingSecret(run);
+  });
+
+  it.each([
+    ["資格情報が1つ足りない", { envFile: Object.fromEntries(Object.entries(CREDENTIALS).filter(([k]) => k !== "R2_SECRET_ACCESS_KEY")) }, "資格情報が無い: R2_SECRET_ACCESS_KEY"],
+    ["CLOUDFLARE_ACCOUNT_ID が production のアカウント", { envFile: { ...CREDENTIALS, CLOUDFLARE_ACCOUNT_ID_PROD: ACCOUNT_ID_HEX.toUpperCase() } }, "production のアカウント"],
+    ["CLOUDFLARE_ACCOUNT_ID が Account ID の形でない", { envFile: { ...CREDENTIALS, CLOUDFLARE_ACCOUNT_ID: "fixture-not-an-account" } }, "Account ID の形"],
+    ["--env-file のファイルが無い", { args: ["--env-file", "fixture-no-such-env-file"] }, "--env-file のファイルが無い"],
+  ])("%s なら、terraform も pnpm も呼ばずに exit 1。値は出さない", (_, options, message) => {
+    const run = reproduce(options);
+    expect(run.code).toBe(1);
+    expect(run.calls).toEqual([]);
+    expect(run.stderr).toContain(message);
+    expectNothingSecret(run);
+    expect(run.all).not.toContain("fixture-not-an-account");
+  });
+
+  it("terraform の版が .terraform-version と違えば、版を見ただけで止める", () => {
+    const run = reproduce({ env: { FAKE_TF_VERSION: "0.0.1" } });
+    expect(run.code).toBe(1);
+    expect(run.calls.map(shown)).toEqual(["terraform version"]);
+    expect(run.stderr).toContain(`terraform のバージョンが .terraform-version と一致しない（入っている: 0.0.1 / 期待: ${TF_VERSION}）`);
+  });
+
+  it("知らない引数は使い方を出して exit 2。--help は exit 0。どちらも何も呼ばない", () => {
+    const bad = reproduce({ args: ["--yes"] });
+    expect(bad.code).toBe(2);
+    expect(bad.calls).toEqual([]);
+    expect(bad.stderr).toContain("infra/scripts/reproduce-dev.sh [--env-file <file>]");
+    const help = reproduce({ args: ["--help"] });
+    expect(help.code).toBe(0);
+    expect(help.calls).toEqual([]);
+    expect(help.stdout).toContain("infra/scripts/reproduce-dev.sh [--env-file <file>]");
+  });
+
+  it("スクリプトは値を echo しない（set -x を使わない）。wrangler・terraform output・smoke を直接呼ばない", () => {
+    const body = readFileSync(SCRIPT, "utf8")
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("#"))
+      .join("\n");
+    expect(body).not.toMatch(/set -[a-z]*x|set -o xtrace/);
+    expect(body).not.toMatch(/\bwrangler (?:deploy|d1|rollback|versions|deployments)|exec wrangler|terraform output|pnpm smoke|--base-url/);
+    expect(body).not.toMatch(/echo [^\n]*\$\{?(tf_token|ci_token|account_id|r2_key|r2_secret|r2_endpoint)/);
   });
 });

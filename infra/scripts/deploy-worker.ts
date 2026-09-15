@@ -1,8 +1,10 @@
 // deploy-worker — CD（deploy-staging / deploy-production）が wrangler で D1 マイグレーションと Worker の配備を行う入口（04 §4）。
 // rollback.yml がコードを巻き戻す入口でもある（04 §6.1・docs/runbook/rollback.md）。
+// dev へ配るのも同じ入口で、並びは infra/scripts/reproduce-dev.sh が持つ（試験A。05 §1）。
 //
 //   pnpm exec tsx infra/scripts/deploy-worker.ts --env <dev|staging|production> --target <migrate|data-api|gateway|host> [--sha <sha>] [--log-dir <dir>]
 //   pnpm exec tsx infra/scripts/deploy-worker.ts --env <dev|staging|production> --rollback-to <sha> [--log-dir <dir>]
+//   pnpm exec tsx infra/scripts/deploy-worker.ts --env dev --smoke [--sha <sha>]
 //
 //   --target migrate   … wrangler d1 migrations apply CONTROL_DB --env <env> --config packages/data-api/wrangler.jsonc --remote
 //                        （リポジトリ直下で。SQL は control-plane にあり、当てる先は data-api の設定の CONTROL_DB。docs/runbook/d1-migration.md）
@@ -68,6 +70,18 @@
 // rollback の出力は deploy と同じく許した行だけを伏せて出す。伏せるものにメールアドレスの形を足してある。
 // wrangler は設定の無い空の一時ディレクトリで動かし、Worker は --name で指す（wrangler.jsonc の env.<env>.name）。
 // wrangler は cwd の .env を読むので、リポジトリ直下で動かすと手元の .env の資格情報が黙って使われる。空のディレクトリならそれが起きない。
+//
+// ── dev の貫通スモーク（--smoke）──────────────────────────────────────────────
+//
+// staging・production の貫通スモークの宛先は、CI の環境の Secret SMOKE_BASE_URL から pnpm smoke に渡す（CLAUDE.md「資格情報の置き場所」）。
+// dev には CD も Secret も無い。だから --smoke は、宛先を **その場で組み立てて smoke.ts に渡す**（2026-09-15・Issue #67）。
+//   1. Cloudflare の API（GET /accounts/<id>/workers/subdomain。読み取りだけ）で、アカウントの workers.dev のサブドメインを読む
+//      （資格情報は CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID。measure-free-tier.ts と同じ読み方）
+//   2. host の Worker 名（apps/host/wrangler.jsonc の env.dev.name）と合わせて https://<name>.<サブドメイン>.workers.dev を作る
+//   3. smoke.ts の runCli を同じプロセスで呼び、環境変数 SMOKE_BASE_URL として渡す。--sha は --expect-sha になる
+// 宛先は表示しない。ファイルにも、コマンド行にも、シェルの変数にも出さない。smoke の出力も伏せてから出す。
+// smoke には SMOKE_BASE_URL だけを渡す。手元のシェルに SMOKE_PROBE_TOKEN（production の値）があっても dev の host には送らない。
+// dev だけに限る：staging・production の宛先の置き場所を二重にしない。CLOUDFLARE_ACCOUNT_ID が production のアカウントなら止める。
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -76,7 +90,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { parse } from "jsonc-parser";
-import { PROBE_REQUIRED_ENVS } from "./smoke.ts";
+import { PROBE_REQUIRED_ENVS, RETRY_POLICY, runCli as runSmoke, type CliIo as SmokeIo } from "./smoke.ts";
 import { ENVS, type Env } from "./sync-bindings.ts";
 
 export const TARGETS = ["migrate", "data-api", "gateway", "host"] as const;
@@ -379,6 +393,54 @@ export function planRollback(workers: readonly WorkerVersions[], sha: string): R
   return { direction, switches: ordered, unchanged };
 }
 
+// ── dev の貫通スモーク：宛先を組み立てる ───────────────────────────────────────────
+
+/** --smoke で宛先を組み立ててよい env。staging・production の宛先は CI の環境の Secret SMOKE_BASE_URL にだけ置く */
+export const SMOKE_ENVS: readonly Env[] = ["dev"];
+
+export const CLOUDFLARE_API = "https://api.cloudflare.com/client/v4";
+
+/** Cloudflare の API の1回の呼び出しの上限 */
+export const API_TIMEOUT_MS = 30_000;
+
+export interface ApiCredentials {
+  readonly token: string;
+  readonly accountId: string;
+}
+
+/** CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID を読む。production のアカウントなら止める。値はエラーにも出さない。 */
+export function readApiCredentials(env: Readonly<Record<string, string | undefined>>): ApiCredentials {
+  const token = env["CLOUDFLARE_API_TOKEN"];
+  const accountId = env["CLOUDFLARE_ACCOUNT_ID"];
+  if (token === undefined || token === "" || accountId === undefined || accountId === "") {
+    throw new DeployError("--smoke には環境変数 CLOUDFLARE_API_TOKEN と CLOUDFLARE_ACCOUNT_ID が要る（アカウント①の CI 用トークン。workers.dev のサブドメインを読む）");
+  }
+  if (!/^[\x21-\x7e]+$/.test(token)) {
+    throw new DeployError("CLOUDFLARE_API_TOKEN にヘッダに載せられない文字（空白・改行・非 ASCII）がある（値は表示しない）");
+  }
+  if (!/^[0-9a-f]{32}$/i.test(accountId)) {
+    throw new DeployError("CLOUDFLARE_ACCOUNT_ID が Account ID の形（32 桁の 16 進）でない（値は表示しない）");
+  }
+  const production = env["CLOUDFLARE_ACCOUNT_ID_PROD"];
+  if (production !== undefined && production.toLowerCase() === accountId.toLowerCase()) {
+    throw new DeployError("CLOUDFLARE_ACCOUNT_ID が production のアカウント（CLOUDFLARE_ACCOUNT_ID_PROD）を指している。--smoke は dev（アカウント①）だけ");
+  }
+  return { token, accountId };
+}
+
+/** GET /accounts/<id>/workers/subdomain の応答から、workers.dev のサブドメイン（DNS のラベル）を読む。値はエラーに出さない。 */
+export function parseSubdomain(body: unknown): string {
+  const result = isRecord(body) ? body["result"] : undefined;
+  const subdomain = isRecord(result) ? result["subdomain"] : undefined;
+  if (!isRecord(body) || body["success"] !== true || typeof subdomain !== "string" || !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i.test(subdomain)) {
+    throw new DeployError("Workers のサブドメインが読めない（workers.dev のサブドメインが無いか、応答の形が違う。値は表示しない）");
+  }
+  return subdomain.toLowerCase();
+}
+
+/** 純粋関数。host の workers.dev のオリジン。**表示しない**（smoke.ts に SMOKE_BASE_URL として渡すだけ）。 */
+export const hostOrigin = (hostName: string, subdomain: string): string => `https://${hostName}.${subdomain}.workers.dev`;
+
 // ── 伏せる ─────────────────────────────────────────────────────────────────
 
 // CSI（色・カーソル）、OSC（リンク。BEL か ST で終わる）、それ以外の2文字のエスケープ
@@ -516,10 +578,15 @@ export interface CliIo {
   err: (line: string) => void;
   /** wrangler を起動するコマンド（実行ファイルと、その前に置く引数） */
   wrangler: readonly string[];
+  /** --smoke：Cloudflare の API（workers.dev のサブドメイン）と host の /healthz を叩く。省略すれば Node の fetch */
+  fetch?: typeof fetch;
+  /** --smoke：smoke の時計・待ち・再試行の方針。省略すれば smoke.ts の既定（RETRY_POLICY） */
+  smoke?: Pick<SmokeIo, "now" | "sleep" | "policy">;
 }
 
 const USAGE = `usage: pnpm exec tsx infra/scripts/deploy-worker.ts --env <${ENVS.join("|")}> --target <${TARGETS.join("|")}> [--sha <sha>] [--log-dir <dir>]
        pnpm exec tsx infra/scripts/deploy-worker.ts --env <${ENVS.join("|")}> --rollback-to <sha> [--log-dir <dir>]
+       pnpm exec tsx infra/scripts/deploy-worker.ts --env <${SMOKE_ENVS.join("|")}> --smoke [--sha <sha>]
 
   --env <env>          配る先の環境。wrangler の --env に渡す
   --target <target>    migrate … D1 マイグレーション（${MIGRATION_CONFIG} の ${MIGRATION_DATABASE} に --remote で当てる）
@@ -530,6 +597,9 @@ const USAGE = `usage: pnpm exec tsx infra/scripts/deploy-worker.ts --env <${ENVS
   --rollback-to <sha>  3つの Worker を、配備済みの版のうち GIT_SHA が <sha> のものへ wrangler rollback で切り替える。
                        build も D1 マイグレーションもしない。古い版へは ${SWITCH_ORDER.back.join(" → ")}、新しい版へは ${SWITCH_ORDER.forward.join(" → ")} の順。
                        --target・--sha と一緒に使わない
+  --smoke              ${SMOKE_ENVS.join(" / ")} だけ。host の workers.dev のオリジンを Cloudflare の API のサブドメインから組み立て（表示しない）、
+                       SMOKE_BASE_URL として pnpm smoke と同じ判定に渡す。--sha は --expect-sha になる。
+                       資格情報は CLOUDFLARE_API_TOKEN・CLOUDFLARE_ACCOUNT_ID。--target・--rollback-to と一緒に使わない
   --log-dir <dir>      wrangler の出力を受けるファイルの置き場。既定は $RUNNER_TEMP、無ければ OS の一時ディレクトリ
 
 ${PROBE_REQUIRED_ENVS.join(" / ")} の ${PROBE_TARGETS.join(" / ")} は、環境変数 ${PROBE_TOKEN_SECRET} の値を secret として一緒に載せる（必須）。
@@ -562,6 +632,7 @@ function parseCliArgs(argv: readonly string[]) {
         target: { type: "string" },
         sha: { type: "string" },
         "rollback-to": { type: "string" },
+        smoke: { type: "boolean" },
         "log-dir": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
@@ -594,6 +665,15 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   }
   if (values.env === undefined) throw new DeployError(`--env が無い\n${USAGE}`);
   if (!isEnv(values.env)) throw new DeployError(`未知の env（${ENVS.join(" / ")} のいずれか。値は表示しない）`);
+  if (values.smoke === true) {
+    if (values.target !== undefined || values["rollback-to"] !== undefined) {
+      throw new DeployError(`--smoke は --target・--rollback-to と一緒に使わない\n${USAGE}`);
+    }
+    if (values.sha !== undefined && !/^[0-9a-f]{7,40}$/i.test(values.sha)) {
+      throw new DeployError("--sha は 7〜40 桁の 16 進（commit の SHA）を渡す（値は表示しない）");
+    }
+    return await runSmokeCheck(values.env, values.sha?.toLowerCase(), io);
+  }
   const tempBase = resolve(io.env["RUNNER_TEMP"] ?? tmpdir());
   const logDir = resolve(values["log-dir"] ?? tempBase);
   const rollbackTo = values["rollback-to"];
@@ -604,7 +684,7 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
     }
     return await runRollback(values.env, rollbackTo.toLowerCase(), io, logDir, tempBase);
   }
-  if (values.target === undefined) throw new DeployError(`--target が無い（または --rollback-to）\n${USAGE}`);
+  if (values.target === undefined) throw new DeployError(`--target が無い（または --rollback-to・--smoke）\n${USAGE}`);
   if (!isTarget(values.target)) throw new DeployError(`未知の target（${TARGETS.join(" / ")} のいずれか。値は表示しない）`);
   const sha = values.sha;
   if (sha !== undefined && !/^[0-9a-f]{7,40}$/i.test(sha)) {
@@ -740,6 +820,65 @@ async function runRollback(env: Env, sha: string, io: CliIo, logDir: string, tem
     throw e;
   } finally {
     rmSync(emptyDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * --smoke：host の workers.dev のオリジンを組み立て、smoke.ts の判定に SMOKE_BASE_URL として渡す（冒頭「dev の貫通スモーク」）。
+ * 宛先は表示しない。smoke の exit code（全層 ok なら 0）をそのまま返す。
+ */
+async function runSmokeCheck(env: Env, sha: string | undefined, io: CliIo): Promise<number> {
+  if (!SMOKE_ENVS.includes(env)) {
+    throw new DeployError(
+      `--smoke は ${SMOKE_ENVS.join(" / ")} だけ。${env} の宛先は CI の ${env} 環境の Secret SMOKE_BASE_URL から pnpm smoke に渡す（CLAUDE.md「資格情報の置き場所」）`,
+    );
+  }
+  const credentials = readApiCredentials(io.env);
+  const name = workerName(io.root, "host", env);
+  const label = `smoke（env=${env}）`;
+  const fetchImpl = io.fetch ?? ((input, init) => fetch(input, init));
+  io.out(`deploy-worker: ${label}: 宛先は host（${name}）の workers.dev のオリジン。Cloudflare の API で読んだサブドメインから組み立て、表示しない`);
+
+  const subdomain = parseSubdomain(await callSubdomainApi(fetchImpl, credentials));
+  // smoke は URL を出さないが、応答から持ち出す文字列もあるので、伏せてから出す
+  const shown = (line: string): string => neutralize(redact(line, credentials.accountId, [credentials.token, subdomain]));
+  const code = await runSmoke(["--env", env, ...(sha === undefined ? [] : ["--expect-sha", sha])], {
+    // 宛先だけを渡す。SMOKE_PROBE_TOKEN（production の値）は dev の host に送らない
+    env: { SMOKE_BASE_URL: hostOrigin(name, subdomain) },
+    out: (line) => io.out(shown(line)),
+    err: (line) => io.err(shown(line)),
+    fetch: fetchImpl,
+    now: io.smoke?.now ?? (() => performance.now()),
+    sleep: io.smoke?.sleep ?? ((ms) => new Promise((done) => setTimeout(done, ms))),
+    policy: io.smoke?.policy ?? RETRY_POLICY,
+  });
+  io.out(`deploy-worker: ${code === 0 ? "OK" : "NG"}  ${label}`);
+  return code === 0 ? EXIT_OK : EXIT_NG;
+}
+
+/** GET /accounts/<id>/workers/subdomain（読み取りだけ）。応答の本文を返す。失敗の文言には URL も値も入れない。 */
+async function callSubdomainApi(fetchImpl: typeof fetch, credentials: ApiCredentials): Promise<unknown> {
+  let res: Response;
+  try {
+    res = await fetchImpl(`${CLOUDFLARE_API}/accounts/${credentials.accountId}/workers/subdomain`, {
+      method: "GET",
+      headers: { authorization: `Bearer ${credentials.token}` },
+      signal: AbortSignal.timeout(API_TIMEOUT_MS),
+    });
+  } catch (e) {
+    // 例外の文言は URL（Account ID）を含み得る。種別だけを出す
+    const cause = (e as { cause?: unknown }).cause;
+    const code = isRecord(cause) ? cause["code"] : (e as { code?: unknown }).code;
+    const kind = typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? code : e instanceof Error && /^\w+$/.test(e.name) ? e.name : typeof e;
+    throw new DeployError(`Cloudflare の API に届かない（${kind}）`);
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new DeployError(`Workers のサブドメインを読む権限が無い（HTTP ${res.status}）。CLOUDFLARE_API_TOKEN はアカウント①の CI 用トークンを渡す`);
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new DeployError(`Workers のサブドメインの応答が JSON でない（HTTP ${res.status}）`);
   }
 }
 
