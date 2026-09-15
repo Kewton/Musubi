@@ -44,7 +44,7 @@
   "observability": { "enabled": true },
 
   // apps/* はインターネットから届く Worker（CLAUDE.md）。dev・staging は workers.dev で受ける（gateway と同じ）。
-  // production は独自ドメイン app.musunest.com でも受ける（env.production の routes。Issue #33）。
+  // production は独自ドメイン app.musunest.com だけで受ける（env.production の routes と workers_dev: false。Issue #33）。
   "workers_dev": true,
 
   // ── Static Assets（env へ継承される。src/worker/index.test.ts が env ごとに確かめる）──
@@ -75,7 +75,10 @@
       // 独自ドメイン（Issue #33）。ゾーン musunest.com はアカウント②にあるので、付けられるのは production だけ（staging は①）。
       // custom domain は wrangler deploy が DNS レコードと証明書を作る。DNS レコードを Terraform に書かない（二重管理にしない）。
       // routes は env へ継承されないので、dev・staging は routes を持たない（src/worker/index.test.ts が確かめる）
-      "routes": [{ "pattern": "app.musunest.com", "custom_domain": true }]
+      "routes": [{ "pattern": "app.musunest.com", "custom_domain": true }],
+      // 独自ドメインで smoke が通ったので（v0.2.1・2026-09-15）、workers.dev と Preview URL を閉じる。production の入口は1つにする
+      "workers_dev": false,
+      "preview_urls": false
     }
   }
 }

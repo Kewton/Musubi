@@ -44,7 +44,7 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 | 置き場所 | 置くもの |
 |---|---|
 | リポジトリ Secret | dev/staging のトークン、R2 の鍵、**`CLOUDFLARE_ACCOUNT_ID`**、**`R2_S3_ENDPOINT`** |
-| **`production` 環境 Secret** | **`CLOUDFLARE_API_TOKEN_PROD`**、**`CLOUDFLARE_ACCOUNT_ID_PROD`**、**`SMOKE_BASE_URL`**（production の host の workers.dev のオリジン）、**`MUSUNEST_PROBE_TOKEN`**（production の `/healthz` の合言葉。32 文字以上） |
+| **`production` 環境 Secret** | **`CLOUDFLARE_API_TOKEN_PROD`**、**`CLOUDFLARE_ACCOUNT_ID_PROD`**、**`SMOKE_BASE_URL`**（production の host の独自ドメインのオリジン `https://app.musunest.com`。2026-09-15 から。秘密ではないが置き場所は変えない）、**`MUSUNEST_PROBE_TOKEN`**（production の `/healthz` の合言葉。32 文字以上） |
 | **`staging` 環境 Secret** | **`SMOKE_BASE_URL`**（staging の host の workers.dev のオリジン。`deploy-staging` の貫通スモークの宛先） |
 | GitHub に置かない | `TF_CLOUDFLARE_API_TOKEN_PROD`（production への apply は人が手元から） |
 | リポジトリ Variable | 公開してよい値だけ（`TFSTATE_BUCKET` など） |
