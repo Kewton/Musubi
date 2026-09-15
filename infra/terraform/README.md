@@ -259,3 +259,20 @@ tfstate のバケットに限ってあるため（`00` H-03）。**`--env dev` �
 - **`name_prefix` が届かない名前がある。** tfstate バケット `musubi-tfstate` と state の key は
   `backend` ブロックに変数を書けないので対象外（#75 の改名でも `musubi-tfstate` のまま）。Worker 名（`musunest-<env>-data-api` 等）は
   `wrangler.jsonc` 側の正本なので、これも Terraform の外で変える
+
+### 7.1 改名の実施記録（2026-09-15・#75）
+
+**順番**：旧 Worker を消す → 旧バケットを空にする → 資源を作り直す → 新しい名前の Worker を配る。
+旧 Worker を先に消したのは、旧 data-api の `/healthz` が BUNDLES に probe のオブジェクトを書き直して、R2 の destroy を止めるのを防ぐため。
+旧バケットにあったのは smoke の probe（`_probe/healthz`）だけで、それ以外のオブジェクトがあれば止まる形で消した。
+
+| 環境 | 作り直し | apply 直後の plan | state の退避 | 新しい Worker |
+|---|---|---|---|---|
+| dev | `infra/scripts/reproduce-dev.sh`（destroy 5 → apply 5 → 同期 → 配る → smoke）34 秒 | exit 0 | `backups/dev/20260915T052407Z-pre-rename.tfstate` | 同じスクリプトで配った。smoke 全 ok |
+| staging | 保存した plan（3 add・2 change・3 destroy。D1・R2×2 は replace、Queue・KV は名前の in-place 変更）を apply | exit 0 | 前 `20260915T052347Z-pre-rename`／後 `20260915T053832Z-post-rename`（復元確認 exit 0） | #76 のマージの deploy-staging（run 34934303108・67 秒）。smoke 全 ok |
+| production | 同上（🧑 手元から） | exit 0 | 前 `20260915T052359Z-pre-rename`／後 `20260915T053849Z-post-rename`（復元確認 exit 0） | `v0.2.0` の deploy-production（run 34934733454・承認後 68 秒）。smoke 全 ok |
+
+- 作り直した後、旧名の資源は tfstate のバケット以外に残っていない（Worker・DO・D1・Queue・KV・R2 を API で確認）
+- production 環境の旧 Secret `MUSUBI_PROBE_TOKEN` は、`v0.2.0` の配備が通ってから消した
+- 旧 Worker を消してから新しい Worker を配るまで（staging は #76 のマージまで、production は `v0.2.0` の承認まで）、`/healthz` は応答しなかった（実データ・利用者なし。数十分）
+- 改名より前のタグ（`v0.1.x`）へは rollback できない（`docs/runbook/rollback.md` §0）

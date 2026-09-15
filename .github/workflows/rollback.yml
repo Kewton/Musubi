@@ -36,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       to:
-        description: 切り替え先の v タグ（例 v0.1.0）。build も D1 マイグレーションもしない
+        description: 切り替え先の v タグ（例 v0.2.0。改名より前の v0.1.x は選べない）。build も D1 マイグレーションもしない
         required: true
         type: string
 
@@ -73,7 +73,7 @@ jobs:
               ;;
           esac
           if [[ ! "$TO" =~ ^v[0-9A-Za-z][0-9A-Za-z._-]{0,62}$ ]]; then
-            echo "::error::to は v タグの名前（例 v0.1.0）。値は表示しない"
+            echo "::error::to は v タグの名前（例 v0.2.0）。値は表示しない"
             exit 1
           fi
           missing=0
