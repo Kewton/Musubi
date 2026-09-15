@@ -479,7 +479,7 @@ Free の上限はアカウント単位。**M0で枠を食う主犯はユーザ�
 
 ## 7. Secrets の扱い
 
-- Worker の secrets（M2以降：LINE Channel Secret 等）は `wrangler secret put` で環境ごとに投入し、**GitHub Secrets からは CI 経由で流し込まない**（CIログ・Actions権限を経由させない）
+- Worker の secrets（M2以降：Google OAuth の Client Secret 等）は `wrangler secret put` で環境ごとに投入し、**GitHub Secrets からは CI 経由で流し込まない**（CIログ・Actions権限を経由させない）
 - **例外：`MUSUBI_PROBE_TOKEN`（2026-09-14・#16 で決定）。** production の `/healthz` の合言葉だけは `production` 環境の Secret に1か所で置き、
   deploy のたびに `--secrets-file` で host と gateway に載せる（§5）。host・gateway・貫通スモークの3か所で同じ値が要り、手で置くと食い違うため。
   値はステップの env と一時ファイルにしか現れず、ログに出さない

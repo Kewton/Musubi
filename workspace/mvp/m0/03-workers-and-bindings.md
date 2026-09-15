@@ -370,8 +370,11 @@ CPU 時間は Worker ごとに記録され、**チェーン合計の上界は 6.
 | 穴 | M0での扱い |
 |---|---|
 | WfP dispatch | staging 担当。M0では使わない（`02` の `wfp_enabled=false`） |
-| LINE Login | M2。devチャネル（🧑 H-10）／mock |
+| Google OAuth | M2。dev 用 OAuth クライアント（🧑 H-11・#23）／mock。**LINE Login は、軌道に乗り要望が出るまで入れない**（2026-09-15 決定。H-10・#22 は保留） |
 | 外部送信 | **dry-runスタブを一級市民に**（M0では送信先がまだ無いので、`connector` パッケージに dry-run インターフェースだけ切っておく） |
+
+> **M2 で Google OAuth を入れるときの注意**：招待URLは LINE で届き、LINE 内ブラウザ（埋め込み WebView）で開かれる。Google は埋め込み WebView での OAuth を `403 disallowed_useragent` で拒否する。
+> 初回参加はゲスト claim でログインが要らないので影響しないが、**紐付けとアプリ作成の入口では外部ブラウザへ移す**（LINE の URL パラメータ `openExternalBrowser=1` 等）。外部ブラウザではクッキーが分かれるので、スロットの再 claim で同じユーザーに戻る前提にする。
 
 ---
 
