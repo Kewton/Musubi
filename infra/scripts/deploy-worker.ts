@@ -1,6 +1,8 @@
 // deploy-worker — CD（deploy-staging / deploy-production）が wrangler で D1 マイグレーションと Worker の配備を行う入口（04 §4）。
+// rollback.yml がコードを巻き戻す入口でもある（04 §6.1・docs/runbook/rollback.md）。
 //
 //   pnpm exec tsx infra/scripts/deploy-worker.ts --env <dev|staging|production> --target <migrate|data-api|gateway|host> [--sha <sha>] [--log-dir <dir>]
+//   pnpm exec tsx infra/scripts/deploy-worker.ts --env <dev|staging|production> --rollback-to <sha> [--log-dir <dir>]
 //
 //   --target migrate   … wrangler d1 migrations apply CONTROL_DB --env <env> --config packages/data-api/wrangler.jsonc --remote
 //                        （リポジトリ直下で。SQL は control-plane にあり、当てる先は data-api の設定の CONTROL_DB。docs/runbook/d1-migration.md）
@@ -28,6 +30,7 @@
 //   - workers.dev のホスト名。サブドメインの段を全部まとめて `<伏せた>.workers.dev` にする
 //   - Account ID の形（32 桁の 16 進）と、環境変数 CLOUDFLARE_ACCOUNT_ID の値。wrangler はエラーや案内に
 //     /accounts/<id>/ や dash.cloudflare.com/<id>/ を出しうる。Secret の値は GitHub もマスクするが、文字列の一致だけなので伏せる側でも持つ
+//   - メールアドレスの形。版とデプロイの記録は author_email を持つ（巻き戻しで読む）
 //   - ANSI エスケープは伏せる前に取り除く。色の切り替えがホスト名の途中に入ると一致しなくなり、OSC 8 のリンクは URL を運ぶ
 // 行頭（空白の後を含む）の `::` は崩す。GitHub Actions のワークフローコマンドとして解釈させない。
 //
@@ -45,6 +48,26 @@
 //   - wrangler の子プロセスには、この環境変数を渡さない（ファイルで渡す）
 //   - wrangler は secret の値を "(hidden)" と表示するが、伏せる側でも値を持って伏せる（上の Account ID と同じ）
 //   - --secrets-file は足し算で、ファイルに無い secret を消さない（wrangler 4.131.1 の deploy --help）
+//
+// ── 巻き戻し（--rollback-to <sha>）──────────────────────────────────────────────
+//
+// 3つの Worker を、**配備済みの版のうち GIT_SHA（deploy の --var）が <sha> のもの**へ wrangler rollback で切り替える
+// （2026-09-14・Issue #17 の決定：コードの一次手段）。build も D1 マイグレーションもしない。secret も載せない
+// （版は配った時点のコード・Static Assets・binding・secret を持っている）。古い版へ戻すのにも、新しい版へ戻す（復帰）のにも使う。
+//
+//   1. 読む（書かない）… Worker ごとに deployments status → 今の版、versions view → その GIT_SHA。
+//                        今の版が <sha> でなければ versions list（直近 VERSIONS_LISTED 版）の版を全部 view する
+//   2. 決める          … 切り替え先は GIT_SHA が <sha> の版のうち、いちばん新しいもの。見つからない Worker が1つでもあれば、
+//                        何も切り替えずに exit 1（二次手段：古い v タグで deploy-production を手動実行）。既に <sha> の Worker は飛ばす。
+//                        向きは「その commit が最初に配られた時刻」を今の commit と比べて決める（planRollback）。
+//                        残りが全部「古い版へ」なら SWITCH_ORDER.back、全部「新しい版へ」なら forward。混ざっていれば切り替えずに exit 1
+//   3. 切り替える      … 決めた順に wrangler rollback <版> --yes。1つずつ deployments status で 100% がその版になったことを確かめる。
+//                        途中で落ちたら止める。同じ <sha> でもう一度動かせば、切り替え済みの Worker を飛ばして続きから切り替える
+//
+// 版を読む wrangler の出力（--json）は author_email を含むので、**JSON はファイルに受けて解釈し、版の ID・作成時刻・GIT_SHA だけを出す。**
+// rollback の出力は deploy と同じく許した行だけを伏せて出す。伏せるものにメールアドレスの形を足してある。
+// wrangler は設定の無い空の一時ディレクトリで動かし、Worker は --name で指す（wrangler.jsonc の env.<env>.name）。
+// wrangler は cwd の .env を読むので、リポジトリ直下で動かすと手元の .env の資格情報が黙って使われる。空のディレクトリならそれが起きない。
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -52,6 +75,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { parse } from "jsonc-parser";
 import { PROBE_REQUIRED_ENVS } from "./smoke.ts";
 import { ENVS, type Env } from "./sync-bindings.ts";
 
@@ -88,9 +112,10 @@ export class DeployError extends Error {
 }
 
 export interface WranglerCall {
-  readonly kind: "migrate" | "deploy";
-  /** wrangler を動かすディレクトリ（リポジトリルートからの相対パス。"." は直下） */
-  readonly cwd: string;
+  /** read は版を読む --json の呼び出し。出力は要約せず、JSON として解釈する */
+  readonly kind: "migrate" | "deploy" | "rollback" | "read";
+  /** wrangler を動かすディレクトリ（リポジトリルートからの相対パス。"." は直下）。null は設定も .env も無い空の一時ディレクトリ */
+  readonly cwd: string | null;
   /** wrangler に渡す引数（--secrets-file を除く。一時ファイルのパスは動かすときに決まる） */
   readonly args: readonly string[];
   /** 一緒に載せる Worker の secret の名前。値は同じ名前の環境変数から読み、--secrets-file で渡す */
@@ -152,6 +177,208 @@ export function readSecrets(names: readonly string[], env: Readonly<Record<strin
   return values;
 }
 
+// ── 巻き戻し：読む・決める ─────────────────────────────────────────────────────
+
+export type Direction = "back" | "forward";
+
+/**
+ * 切り替える Worker の順。forward は配る順（呼ばれる側を先に置く）、back はその逆（呼ぶ側を先に戻す）。
+ * どちらも途中の瞬間は「呼ぶ側が古く、呼ばれる側が新しい」になり、配っている途中と同じ組み合わせしか生まれない。
+ */
+export const SWITCH_ORDER: Readonly<Record<Direction, readonly WorkerTarget[]>> = {
+  forward: ["data-api", "gateway", "host"],
+  back: ["host", "gateway", "data-api"],
+};
+
+/** wrangler versions list が返す版の数（wrangler 4.131.1 の VERSION_LIST_LIMIT）。これより前の版は探さない */
+export const VERSIONS_LISTED = 10;
+
+/** rollback の --message の頭。版の履歴（dashboard・deployments list）に残る */
+export const ROLLBACK_MESSAGE = "deploy-worker --rollback-to";
+
+const VERSION_ID = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+
+export interface VersionInfo {
+  readonly id: string;
+  /** metadata.created_on（ISO 8601） */
+  readonly createdOn: string;
+}
+
+export interface VersionDetail extends VersionInfo {
+  /** binding GIT_SHA（plain_text）の値。無ければ undefined（--var GIT_SHA を付けずに配った版） */
+  readonly gitSha: string | undefined;
+}
+
+/** Worker の名前（wrangler.jsonc の env.<env>.name）。版を読む・切り替える wrangler には設定を読ませず、--name で指す。 */
+export function workerName(root: string, target: WorkerTarget, env: Env): string {
+  const file = `${WORKER_DIRS[target]}/wrangler.jsonc`;
+  const config = parse(readFileSync(join(root, file), "utf8")) as { env?: Record<string, { name?: unknown } | undefined> } | undefined;
+  const name = config?.env?.[env]?.name;
+  if (typeof name !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(name)) throw new DeployError(`${file} に env.${env}.name が無い`);
+  return name;
+}
+
+/** 純粋関数。版を読む wrangler の呼び方（--json。空の一時ディレクトリで動かす）。 */
+export const readCall = {
+  status: (name: string): WranglerCall => ({ kind: "read", cwd: null, args: ["deployments", "status", "--name", name, "--json"], secrets: [] }),
+  list: (name: string): WranglerCall => ({ kind: "read", cwd: null, args: ["versions", "list", "--name", name, "--json"], secrets: [] }),
+  view: (name: string, versionId: string): WranglerCall => ({
+    kind: "read",
+    cwd: null,
+    args: ["versions", "view", versionId, "--name", name, "--json"],
+    secrets: [],
+  }),
+};
+
+/** 純粋関数。版を切り替える wrangler の呼び方。--yes と、stdin を渡さないこと（非対話）で確認を既定値のまま進める。 */
+export function rollbackCall(name: string, versionId: string, sha: string): WranglerCall {
+  if (!VERSION_ID.test(versionId)) throw new DeployError("版の ID の形でない（値は表示しない）");
+  return {
+    kind: "rollback",
+    cwd: null,
+    args: ["rollback", versionId, "--name", name, "--message", `${ROLLBACK_MESSAGE} ${sha}`, "--yes"],
+    secrets: [],
+  };
+}
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+// JSON.parse の例外文言は入力の断片（author_email を含みうる）を含むので捨てる
+function parseJson(text: string, what: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new DeployError(`${what} の出力が JSON として読めない（中身は表示しない）`);
+  }
+}
+
+function versionInfo(raw: unknown, what: string): VersionInfo {
+  const id = isRecord(raw) ? raw["id"] : undefined;
+  const createdOn = isRecord(raw) && isRecord(raw["metadata"]) ? raw["metadata"]["created_on"] : undefined;
+  if (typeof id !== "string" || !VERSION_ID.test(id) || typeof createdOn !== "string" || Number.isNaN(Date.parse(createdOn))) {
+    throw new DeployError(`${what} の形が想定と違う（id と metadata.created_on）`);
+  }
+  return { id, createdOn };
+}
+
+/** wrangler deployments status --json から、今のデプロイが 100% を向けている版の ID を読む。 */
+export function parseCurrentVersion(text: string): string {
+  const what = "wrangler deployments status --json";
+  const raw = parseJson(text, what);
+  const versions = isRecord(raw) ? raw["versions"] : undefined;
+  if (!Array.isArray(versions)) throw new DeployError(`${what} の形が想定と違う（versions が無い）`);
+  const [only] = versions;
+  if (versions.length !== 1 || !isRecord(only) || only["percentage"] !== 100) {
+    throw new DeployError("今のデプロイが1つの版に 100% を向けていない（段階的デプロイの途中）。切り替えずに止める（docs/runbook/rollback.md）");
+  }
+  const id = only["version_id"];
+  if (typeof id !== "string" || !VERSION_ID.test(id)) throw new DeployError(`${what} の形が想定と違う（version_id）`);
+  return id;
+}
+
+/** wrangler versions list --json を、新しい版から並べて返す。 */
+export function parseVersionList(text: string): VersionInfo[] {
+  const what = "wrangler versions list --json";
+  const raw = parseJson(text, what);
+  if (!Array.isArray(raw)) throw new DeployError(`${what} の形が想定と違う（配列でない）`);
+  return raw.map((v) => versionInfo(v, what)).toSorted((a, b) => Date.parse(b.createdOn) - Date.parse(a.createdOn));
+}
+
+/** wrangler versions view --json から、版の ID・作成時刻・GIT_SHA を読む。 */
+export function parseVersionDetail(text: string): VersionDetail {
+  const what = "wrangler versions view --json";
+  const raw = parseJson(text, what);
+  const bindings = isRecord(raw) && isRecord(raw["resources"]) ? raw["resources"]["bindings"] : undefined;
+  if (!Array.isArray(bindings)) throw new DeployError(`${what} の形が想定と違う（resources.bindings が無い）`);
+  const git = bindings.find((b) => isRecord(b) && b["name"] === "GIT_SHA" && b["type"] === "plain_text");
+  const value = isRecord(git) ? git["text"] : undefined;
+  return { ...versionInfo(raw, what), gitSha: typeof value === "string" && /^[0-9a-f]{7,40}$/i.test(value) ? value.toLowerCase() : undefined };
+}
+
+/** 版の GIT_SHA が、切り替え先の commit（7〜40 桁の先頭）と一致するか。 */
+export function matchesSha(gitSha: string | undefined, sha: string): boolean {
+  return gitSha !== undefined && gitSha.startsWith(sha.toLowerCase());
+}
+
+export interface WorkerVersions {
+  readonly target: WorkerTarget;
+  readonly name: string;
+  readonly current: VersionDetail;
+  /** 読んだ版（今の版を含む）。今の版が切り替え先の commit なら今の版だけでよい */
+  readonly versions: readonly VersionDetail[];
+}
+
+export interface Switch {
+  readonly target: WorkerTarget;
+  readonly name: string;
+  readonly from: VersionDetail;
+  readonly to: VersionDetail;
+}
+
+export interface RollbackPlan {
+  /** 切り替えるものが無ければ undefined */
+  readonly direction: Direction | undefined;
+  /** 切り替える順に並べたもの */
+  readonly switches: readonly Switch[];
+  /** 既に切り替え先の版で動いている Worker */
+  readonly unchanged: readonly WorkerTarget[];
+}
+
+/** その commit が最初に配られた時刻（読んだ版のうち、いちばん古いもの）。二次手段で古い commit を配り直しても、コードの新旧はこれで決まる */
+function firstDeployed(versions: readonly VersionDetail[], matches: (v: VersionDetail) => boolean): number {
+  return Math.min(...versions.filter(matches).map((v) => Date.parse(v.createdOn)));
+}
+
+/**
+ * 純粋関数。読んだ版から、どの Worker をどの版へどの順で切り替えるかを決める。決められなければ DeployError（何も切り替えない）。
+ *   切り替え先 … GIT_SHA が一致する版のうち、いちばん新しいもの（今の版が一致すれば今の版）
+ *   向き       … 切り替え先の commit と今の commit の、それぞれが最初に配られた時刻で比べる。版の作成時刻そのものでは比べない
+ *                （古いタグで deploy-production を回し直すと、古いコードの版のほうが新しくなる）
+ */
+export function planRollback(workers: readonly WorkerVersions[], sha: string): RollbackPlan {
+  const wanted = new Map<WorkerTarget, VersionDetail>();
+  for (const w of workers) {
+    const found = matchesSha(w.current.gitSha, sha)
+      ? w.current
+      : w.versions.filter((v) => matchesSha(v.gitSha, sha)).toSorted((a, b) => Date.parse(b.createdOn) - Date.parse(a.createdOn))[0];
+    if (found !== undefined) wanted.set(w.target, found);
+  }
+  const missing = workers.filter((w) => !wanted.has(w.target)).map((w) => w.target);
+  if (missing.length > 0) {
+    throw new DeployError(
+      `GIT_SHA が ${sha} の版が見つからない：${missing.join(", ")}（直近 ${VERSIONS_LISTED} 版まで探した）。何も切り替えない。` +
+        "二次手段：その commit の v タグで deploy-production を手動実行する（docs/runbook/rollback.md）",
+    );
+  }
+  const switches: Switch[] = [];
+  const unchanged: WorkerTarget[] = [];
+  const directions = new Map<Direction, WorkerTarget[]>();
+  for (const w of workers) {
+    const to = wanted.get(w.target);
+    if (to === undefined) continue;
+    if (to.id === w.current.id) {
+      unchanged.push(w.target);
+      continue;
+    }
+    switches.push({ target: w.target, name: w.name, from: w.current, to });
+    const all = [w.current, ...w.versions];
+    const target = firstDeployed(all, (v) => matchesSha(v.gitSha, sha));
+    // GIT_SHA の無い今の版は、その版の作成時刻で比べる
+    const current = w.current.gitSha === undefined ? Date.parse(w.current.createdOn) : firstDeployed(all, (v) => v.gitSha === w.current.gitSha);
+    const direction: Direction = target < current ? "back" : "forward";
+    directions.set(direction, [...(directions.get(direction) ?? []), w.target]);
+  }
+  const [direction, ...others] = [...directions.keys()];
+  if (others.length > 0) {
+    throw new DeployError(
+      `古い版へ戻す Worker（${directions.get("back")?.join(", ")}）と新しい版へ進める Worker（${directions.get("forward")?.join(", ")}）が混ざっている。` +
+        "どちらの順でも途中の組み合わせを保証できないので、何も切り替えない（docs/runbook/rollback.md）",
+    );
+  }
+  const ordered = direction === undefined ? [] : SWITCH_ORDER[direction].flatMap((t) => switches.filter((s) => s.target === t));
+  return { direction, switches: ordered, unchanged };
+}
+
 // ── 伏せる ─────────────────────────────────────────────────────────────────
 
 // CSI（色・カーソル）、OSC（リンク。BEL か ST で終わる）、それ以外の2文字のエスケープ
@@ -161,10 +388,13 @@ const ANSI = /\u001b\[[0-?]*[ -/]*[@-~]|\u001b\][^\u0007\u001b]*(?:\u0007|\u001b
 /** workers.dev のホスト名（サブドメインの段を全部含む）。 */
 export const WORKERS_DEV_HOST = /(?:[a-z0-9_-]+\.)+workers\.dev(?![a-z0-9_-])/gi;
 const ACCOUNT_ID_SHAPE = /\b[0-9a-f]{32}\b/gi;
+/** メールアドレスの形。版とデプロイの記録（author_email）に載る */
+const EMAIL_SHAPE = /[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}/gi;
 
 export const REDACTED_HOST = "<伏せた>.workers.dev";
 export const REDACTED_ACCOUNT = "<伏せた:account>";
 export const REDACTED_SECRET = "<伏せた:secret>";
+export const REDACTED_EMAIL = "<伏せた:email>";
 
 export function stripAnsi(text: string): string {
   return text.replace(ANSI, "");
@@ -179,7 +409,7 @@ export function redact(line: string, accountId?: string, secrets: readonly strin
   }
   // 短すぎる値で伏せると、関係の無い文字列まで崩す。Account ID は 32 桁
   if (accountId !== undefined && accountId.length >= 8) out = out.split(accountId).join(REDACTED_ACCOUNT);
-  return out.replace(ACCOUNT_ID_SHAPE, REDACTED_ACCOUNT).replace(WORKERS_DEV_HOST, REDACTED_HOST);
+  return out.replace(ACCOUNT_ID_SHAPE, REDACTED_ACCOUNT).replace(WORKERS_DEV_HOST, REDACTED_HOST).replace(EMAIL_SHAPE, REDACTED_EMAIL);
 }
 
 /** 行頭（空白の後を含む）の `::` を崩す。GitHub Actions はそこから始まる行をワークフローコマンドとして読む。 */
@@ -231,6 +461,23 @@ export const SUMMARY: Readonly<Record<WranglerCall["kind"], readonly SummaryRule
     { line: /Executing on (?:remote|local) database / },
     { line: /^▲ \[WARNING\] / },
   ],
+  // wrangler 4.131.1 の versions/rollback のソースから。行頭に枠の文字（├ │ ╰）と細い空白が付く
+  rollback: [
+    { line: /Your current deployment has \d+ version\(s\):/ },
+    { line: /\(\d+%\) [0-9a-f-]{36}\s*$/ },
+    { line: /Created:\s+\d{4}-/ },
+    { line: /Using (?:default|fallback) value in non-interactive context:/ }, // message と確認を CI で既定値のまま進めたこと
+    { line: /WARNING\s+You are about to rollback to Worker Version / },
+    // secret が変わった版へ戻すとき。続く字下げの行が secret の名前（値ではない）。非対話では確かめずに進む
+    { line: /The following secrets have changed since version /, continuation: true },
+    { line: /^Performing rollback\.\.\./ },
+    { line: /Aborting rollback/ },
+    { line: /Worker Version \S+ has been deployed to 100% of traffic\./ },
+    { line: /^Current Version ID: / },
+    { line: /^▲ \[WARNING\] / },
+  ],
+  // 出力は JSON としてファイルに受けて解釈する。ログには出さない
+  read: [],
 };
 
 /** 成功したときの要約。許した行だけを、伏せてから返す。 */
@@ -272,14 +519,18 @@ export interface CliIo {
 }
 
 const USAGE = `usage: pnpm exec tsx infra/scripts/deploy-worker.ts --env <${ENVS.join("|")}> --target <${TARGETS.join("|")}> [--sha <sha>] [--log-dir <dir>]
+       pnpm exec tsx infra/scripts/deploy-worker.ts --env <${ENVS.join("|")}> --rollback-to <sha> [--log-dir <dir>]
 
-  --env <env>        配る先の環境。wrangler の --env に渡す
-  --target <target>  migrate … D1 マイグレーション（${MIGRATION_CONFIG} の ${MIGRATION_DATABASE} に --remote で当てる）
-                     ${Object.entries(WORKER_DIRS)
-                       .map(([name, dir]) => `${name} … ${dir} で wrangler deploy`)
-                       .join("\n                     ")}
-  --sha <sha>        deploy に必須。--var GIT_SHA:<sha> で渡す（7〜40 桁の 16 進）
-  --log-dir <dir>    wrangler の出力を受けるファイルの置き場。既定は $RUNNER_TEMP、無ければ OS の一時ディレクトリ
+  --env <env>          配る先の環境。wrangler の --env に渡す
+  --target <target>    migrate … D1 マイグレーション（${MIGRATION_CONFIG} の ${MIGRATION_DATABASE} に --remote で当てる）
+                       ${Object.entries(WORKER_DIRS)
+                         .map(([name, dir]) => `${name} … ${dir} で wrangler deploy`)
+                         .join("\n                       ")}
+  --sha <sha>          deploy に必須。--var GIT_SHA:<sha> で渡す（7〜40 桁の 16 進）
+  --rollback-to <sha>  3つの Worker を、配備済みの版のうち GIT_SHA が <sha> のものへ wrangler rollback で切り替える。
+                       build も D1 マイグレーションもしない。古い版へは ${SWITCH_ORDER.back.join(" → ")}、新しい版へは ${SWITCH_ORDER.forward.join(" → ")} の順。
+                       --target・--sha と一緒に使わない
+  --log-dir <dir>      wrangler の出力を受けるファイルの置き場。既定は $RUNNER_TEMP、無ければ OS の一時ディレクトリ
 
 ${PROBE_REQUIRED_ENVS.join(" / ")} の ${PROBE_TARGETS.join(" / ")} は、環境変数 ${PROBE_TOKEN_SECRET} の値を secret として一緒に載せる（必須）。
 値は一時ファイルに書いて --secrets-file で渡し、wrangler が終わったらすぐ消す。値は一切表示しない。
@@ -310,6 +561,7 @@ function parseCliArgs(argv: readonly string[]) {
         env: { type: "string" },
         target: { type: "string" },
         sha: { type: "string" },
+        "rollback-to": { type: "string" },
         "log-dir": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
@@ -342,7 +594,17 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   }
   if (values.env === undefined) throw new DeployError(`--env が無い\n${USAGE}`);
   if (!isEnv(values.env)) throw new DeployError(`未知の env（${ENVS.join(" / ")} のいずれか。値は表示しない）`);
-  if (values.target === undefined) throw new DeployError(`--target が無い\n${USAGE}`);
+  const tempBase = resolve(io.env["RUNNER_TEMP"] ?? tmpdir());
+  const logDir = resolve(values["log-dir"] ?? tempBase);
+  const rollbackTo = values["rollback-to"];
+  if (rollbackTo !== undefined) {
+    if (values.target !== undefined || values.sha !== undefined) throw new DeployError(`--rollback-to は --target・--sha と一緒に使わない\n${USAGE}`);
+    if (!/^[0-9a-f]{7,40}$/i.test(rollbackTo)) {
+      throw new DeployError("--rollback-to は 7〜40 桁の 16 進（commit の SHA）を渡す（値は表示しない）");
+    }
+    return await runRollback(values.env, rollbackTo.toLowerCase(), io, logDir, tempBase);
+  }
+  if (values.target === undefined) throw new DeployError(`--target が無い（または --rollback-to）\n${USAGE}`);
   if (!isTarget(values.target)) throw new DeployError(`未知の target（${TARGETS.join(" / ")} のいずれか。値は表示しない）`);
   const sha = values.sha;
   if (sha !== undefined && !/^[0-9a-f]{7,40}$/i.test(sha)) {
@@ -353,8 +615,6 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   const call = wranglerCall(target, env, sha);
   const secrets = readSecrets(call.secrets, io.env);
 
-  const tempBase = io.env["RUNNER_TEMP"] ?? tmpdir();
-  const logDir = resolve(values["log-dir"] ?? tempBase);
   const logPath = join(logDir, `deploy-worker-${env}-${target}.log`);
   const accountId = io.env["CLOUDFLARE_ACCOUNT_ID"];
   const secretValues = Object.values(secrets);
@@ -362,8 +622,8 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
 
   // 一時ファイルのパスは毎回変わるので、載せる secret の名前だけを出す
   const shownArgs = [...call.args, ...(call.secrets.length === 0 ? [] : ["--secrets-file", `<一時ファイル: ${call.secrets.join(", ")}>`])];
-  io.out(`deploy-worker: ${label}: wrangler ${shownArgs.join(" ")}（${call.cwd}）`);
-  const code = await runWrangler(io, call, logPath, secrets, resolve(tempBase));
+  io.out(`deploy-worker: ${label}: wrangler ${shownArgs.join(" ")}（${call.cwd ?? "一時ディレクトリ"}）`);
+  const code = await runWrangler(io, call, { logPath, secrets, tempBase });
   const text = readFileSync(logPath, "utf8");
 
   if (code === 0) {
@@ -381,24 +641,136 @@ async function run(argv: readonly string[], io: CliIo): Promise<number> {
   return EXIT_NG;
 }
 
+/** 版の見せ方。ID・GIT_SHA の先頭・作成時刻だけ（author_email などは出さない） */
+const showVersion = (v: VersionDetail): string => `${v.id}（GIT_SHA ${v.gitSha?.slice(0, 12) ?? "なし"}・${v.createdOn}）`;
+
 /**
- * wrangler を1回動かし、標準出力と標準エラーを logPath に受ける。exit code を返す（シグナルで終われば 1）。
+ * --rollback-to：3つの Worker の版を読み、切り替える順を決め、wrangler rollback で1つずつ切り替える（冒頭「巻き戻し」）。
+ * 読んでいる途中・決められないときは何も切り替えずに DeployError。切り替えの途中で落ちたら、どこまで切り替えたかを出して exit 1。
+ */
+async function runRollback(env: Env, sha: string, io: CliIo, logDir: string, tempBase: string): Promise<number> {
+  const accountId = io.env["CLOUDFLARE_ACCOUNT_ID"];
+  const label = `rollback（env=${env}）`;
+  // 設定も .env も無い空のディレクトリで wrangler を動かす（冒頭「巻き戻し」）
+  mkdirSync(tempBase, { recursive: true });
+  const emptyDir = mkdtempSync(join(tempBase, "deploy-worker-rollback-"));
+  let seq = 0;
+
+  /** wrangler を1回動かす。exit 0 以外は伏せた全文を出して DeployError。read は標準出力（JSON）を、rollback は要約を返す */
+  const invoke = async (call: WranglerCall, what: string): Promise<{ stdout: string; summary: string[] }> => {
+    const base = join(logDir, `deploy-worker-${env}-rollback-${String(++seq).padStart(2, "0")}`);
+    const logPath = `${base}.log`;
+    const stdoutPath = call.kind === "read" ? `${base}.json` : undefined;
+    const code = await runWrangler(io, call, { logPath, stdoutPath, secrets: {}, tempBase, emptyDir });
+    const text = readFileSync(logPath, "utf8");
+    if (code !== 0) {
+      io.out(`deploy-worker: ${what}: wrangler が exit ${code} で終わった。出力（${logPath}）の全文を伏せて出す`);
+      for (const line of failureLines(text, accountId)) io.out(`  ${line}`);
+      throw new DeployError(`${what} に失敗した（上の出力）`);
+    }
+    return {
+      stdout: stdoutPath === undefined ? "" : readFileSync(stdoutPath, "utf8"),
+      summary: call.kind === "read" ? [] : summarize(call.kind, text, accountId),
+    };
+  };
+  const currentVersionId = async (name: string): Promise<string> =>
+    parseCurrentVersion((await invoke(readCall.status(name), `${name} の今のデプロイを読む`)).stdout);
+  const versionDetail = async (name: string, id: string): Promise<VersionDetail> =>
+    parseVersionDetail((await invoke(readCall.view(name, id), `${name} の版 ${id} を読む`)).stdout);
+
+  try {
+    io.out(`deploy-worker: ${label}: 3つの Worker を GIT_SHA が ${sha} の版へ切り替える。build も D1 マイグレーションもしない`);
+    io.out(`deploy-worker: wrangler の出力は ${join(logDir, `deploy-worker-${env}-rollback-*`)} に受けた。ここには版の ID・作成時刻・GIT_SHA と、伏せた要約だけを出す`);
+
+    // 1. 読む（書かない）。今の版が切り替え先の commit でなければ、直近の版を全部読む（向きを決めるのに、各 commit が最初に配られた時刻が要る）
+    const workers: WorkerVersions[] = [];
+    for (const target of SWITCH_ORDER.forward) {
+      const name = workerName(io.root, target, env);
+      const current = await versionDetail(name, await currentVersionId(name));
+      const versions: VersionDetail[] = [current];
+      if (!matchesSha(current.gitSha, sha)) {
+        const listed = parseVersionList((await invoke(readCall.list(name), `${name} の版の一覧を読む`)).stdout);
+        for (const version of listed.filter((v) => v.id !== current.id)) versions.push(await versionDetail(name, version.id));
+      }
+      workers.push({ target, name, current, versions });
+      io.out(`  ${target}（${name}）: 今 ${showVersion(current)}。読んだ版 ${versions.length}`);
+    }
+
+    // 2. 決める
+    const plan = planRollback(workers, sha);
+    if (plan.direction === undefined) {
+      io.out(`deploy-worker: OK  ${label}: 3つとも既に GIT_SHA ${sha} の版で動いている。切り替えるものは無い`);
+      return EXIT_OK;
+    }
+    for (const s of plan.switches) io.out(`  ${s.target}: ${showVersion(s.from)} → ${showVersion(s.to)}`);
+    const order = plan.switches.map((s) => s.target);
+    io.out(
+      `deploy-worker: ${plan.direction === "back" ? "古い版へ戻す" : "新しい版へ進める"}。順は ${order.join(" → ")}` +
+        (plan.unchanged.length === 0 ? "" : `（${plan.unchanged.join(", ")} は既に切り替え先の版なので飛ばす）`),
+    );
+
+    // 3. 切り替える
+    const started = Date.now();
+    const done: WorkerTarget[] = [];
+    try {
+      for (const s of plan.switches) {
+        const call = rollbackCall(s.name, s.to.id, sha);
+        io.out(`deploy-worker: ${s.target}: wrangler ${call.args.join(" ")}`);
+        const { summary } = await invoke(call, `${s.target} の rollback`);
+        if (summary.length === 0) io.out("  （要約に当たる行が無い。wrangler の出力の形が変わった可能性がある）");
+        for (const line of summary) io.out(`  ${line}`);
+        const now = await currentVersionId(s.name);
+        if (now !== s.to.id) throw new DeployError(`${s.target}: rollback の後も、今のデプロイが切り替え先の版を向いていない（今 ${now}）`);
+        io.out(`deploy-worker: ${s.target}: 今のデプロイが ${s.to.id} を 100% で向いていることを確かめた`);
+        done.push(s.target);
+      }
+    } catch (e) {
+      const rest = order.filter((t) => !done.includes(t));
+      io.out(
+        `deploy-worker: 切り替え済み：${done.length === 0 ? "なし" : done.join(", ")}。未切り替え：${rest.join(", ")}。` +
+          "途中の組み合わせは配っている途中と同じ（呼ぶ側が古く、呼ばれる側が新しい）。同じ --rollback-to でもう一度動かすと、続きから切り替える",
+      );
+      throw e;
+    }
+    const seconds = Math.round((Date.now() - started) / 1000);
+    io.out(`deploy-worker: OK  ${label}: 3つの Worker が GIT_SHA ${sha} の版で動いている（切り替え ${seconds} 秒）`);
+    return EXIT_OK;
+  } catch (e) {
+    if (e instanceof DeployError) io.out(`deploy-worker: NG  ${label}`);
+    throw e;
+  } finally {
+    rmSync(emptyDir, { recursive: true, force: true });
+  }
+}
+
+interface RunOptions {
+  /** 標準エラー（stdoutPath が無ければ標準出力も）を受けるファイル */
+  readonly logPath: string;
+  /** 標準出力だけを分けて受けるファイル（--json の出力） */
+  readonly stdoutPath?: string | undefined;
+  readonly secrets: Readonly<Record<string, string>>;
+  /** secret の一時ファイルの置き場 */
+  readonly tempBase: string;
+  /** call.cwd が null のときに動かすディレクトリ */
+  readonly emptyDir?: string | undefined;
+}
+
+/**
+ * wrangler を1回動かし、標準出力と標準エラーをファイルに受ける。exit code を返す（シグナルで終われば 1）。
  * secrets があれば tempBase の下の一時ディレクトリにファイルで書いて --secrets-file で渡し、wrangler が終わったら消す。
  */
-async function runWrangler(
-  io: CliIo,
-  call: WranglerCall,
-  logPath: string,
-  secrets: Readonly<Record<string, string>>,
-  tempBase: string,
-): Promise<number> {
+async function runWrangler(io: CliIo, call: WranglerCall, options: RunOptions): Promise<number> {
+  const { logPath, stdoutPath, secrets, tempBase, emptyDir } = options;
   const [command, ...prefix] = io.wrangler;
   if (command === undefined) throw new DeployError("wrangler を起動するコマンドが無い");
+  const cwd = call.cwd === null ? emptyDir : join(io.root, call.cwd);
+  if (cwd === undefined) throw new DeployError("wrangler を動かす空のディレクトリが無い");
   // 載せる secret の環境変数は子プロセスに渡さない（ファイルで渡す）
   const childEnv: Record<string, string | undefined> = { ...io.env, FORCE_COLOR: "0" };
   delete childEnv[PROBE_TOKEN_SECRET];
   mkdirSync(dirname(logPath), { recursive: true });
   const fd = openSync(logPath, "w");
+  const outFd = stdoutPath === undefined ? fd : openSync(stdoutPath, "w");
   let secretsDir: string | undefined;
   try {
     const args = [...call.args];
@@ -411,10 +783,10 @@ async function runWrangler(
     }
     return await new Promise<number>((done, fail) => {
       const child = spawn(command, [...prefix, ...args], {
-        cwd: join(io.root, call.cwd),
+        cwd,
         // 色を切る（伏せる前に ANSI も落とすが、出さないに越したことはない）。stdin を渡さない：確認は非対話の既定値で進む
         env: childEnv,
-        stdio: ["ignore", fd, fd],
+        stdio: ["ignore", outFd, fd],
       });
       child.on("error", (e) => {
         const code = (e as { code?: unknown }).code;
@@ -424,6 +796,7 @@ async function runWrangler(
     });
   } finally {
     closeSync(fd);
+    if (outFd !== fd) closeSync(outFd);
     // 成功しても失敗しても、wrangler が終わったらすぐ消す
     if (secretsDir !== undefined) rmSync(secretsDir, { recursive: true, force: true });
   }

@@ -16,7 +16,7 @@
 | `.github/workflows/infra-plan.yml` | PR（`infra/**` 変更時） | `terraform plan` を3環境ぶん実行しPRコメント | なし |
 | `.github/workflows/deploy-staging.yml` | push to `main` ／ 手動（`workflow_dispatch`。main のみ） | 乖離チェック → D1 migration → deploy → smoke | なし（自動） |
 | `.github/workflows/deploy-production.yml` | tag `v*` ／ 手動（`workflow_dispatch`。v タグのみ） | 乖離チェック → D1 migration → deploy → smoke | 🧑 **required reviewer** |
-| `.github/workflows/rollback.yml` | 手動（`workflow_dispatch`） | 指定タグへ巻き戻し | 🧑 **required reviewer** |
+| `.github/workflows/rollback.yml` | 手動（`workflow_dispatch`。v タグのみ） | 指定した v タグの配備済みの版へ切り替え（wrangler rollback）→ smoke | 🧑 **required reviewer** |
 
 **required status checks（`main` 保護に登録するジョブ名）**
 - `lint-typecheck-unit`
@@ -331,7 +331,8 @@ production も初回デプロイなので、**上限つきのまま**広げた�
 
 - `CLOUDFLARE_API_TOKEN_PROD` / `CLOUDFLARE_ACCOUNT_ID_PROD` / `MUSUBI_PROBE_TOKEN` は **`production` 環境の Secret** にだけある。
   読めるのは `environment: production` を宣言したジョブだけで、そのジョブは `v*` タグからしか起動できず、承認が要る
-- `deploy-production.yml` 以外のワークフローは、`production` 環境を宣言せず、これらの名前を書かない。
+- `production` 環境を宣言するのは **`deploy-production.yml` と `rollback.yml`（§6.1・2026-09-14 #17 で追加）だけ**。
+  それ以外のワークフローは、`production` 環境を宣言せず、これらの名前を書かない。
   `deploy-staging.yml` は `SMOKE_PROBE_TOKEN` も渡さない（`deploy-worker.test.ts` が全ワークフローを走査して確かめる）
 - `SMOKE_BASE_URL` は staging 環境と production 環境に同じ名前で別の値を置く。どちらが届くかはジョブが宣言した環境で決まる
 
@@ -379,24 +380,58 @@ git push origin v0.1.0
 
 企画書21章は「ロールバック手順**文書化**」を求めている。M0では**実際に1回やってみる**ところまでを完了条件にする（手順書は使われて初めて手順書になる）。
 
-`docs/runbook/rollback.md` に書く内容：
+**手順の正本は [`docs/runbook/rollback.md`](../../../docs/runbook/rollback.md)。** ここには決定と、壊さないための規則だけを書く。
+
+> **2026-09-14 決定（Issue #17・所有者が承認）**
+>
+> 1. コードの一次手段は **wrangler rollback**（Worker の配備済みの版へ即時に切り替える。build もマイグレーションもしない）。手動実行のワークフロー `rollback.yml` で行い、production は承認つき
+> 2. 二次手段は、古い v タグで `deploy-production.yml` を手動実行し直す
+> 3. D1 は巻き戻さない（前方互換の規律。最後の手段は Time Travel）。Terraform は state の退避と復元で扱う
+> 4. 実演は所有者の立ち会い：新しいタグで production に配る → 1つ前の版へ戻す → smoke で古い版を確かめる → 新しい版へ戻す → 記録を runbook に残す（`rollback.md` §4）
+>
+> 旧版の「`rollback.yml` は指定タグを checkout → build → deploy → smoke」は採らない。それは二次手段（`deploy-production.yml` の手動実行）と同じことで、
+> build を挟むぶん遅く、戻す瞬間に初めて古いコードをビルドすることになる。
 
 ### 6.1 コードのロールバック
 
 ```bash
-# 直前の正常タグへ巻き戻す
-gh workflow run rollback.yml -f target_tag=v0.1.0 -f env=production
+# 一次手段：production の3つの Worker を、直前の正常タグ（例 v0.1.0）の commit の版へ切り替える（🧑 承認）
+gh workflow run rollback.yml --ref <rollback.yml を含む v タグ> -f to=v0.1.0
+# 二次手段：v0.1.0 を配り直す（🧑 承認）
+gh workflow run deploy-production.yml --ref v0.1.0
 ```
 
-`rollback.yml` は「指定タグを checkout → build → deploy（マイグレーションは**当てない**）→ smoke」を行う。
+**正本は `.github/workflows/rollback.yml`**（§3〜§5 と同じ理由で全文を複製しない）。並び・資格情報の置き場所・起動条件は `infra/scripts/deploy-worker.test.ts` が確かめる。
 
-**より速い代替**：Cloudflare の Worker には過去バージョンへの巻き戻し機能がある（`wrangler rollback` / ダッシュボードの Deployments）。**どちらを一次手段にするかをM0で決めて書く。**
-- 推奨：**まず `wrangler rollback` で即時復旧 → 落ち着いてから git tag でのやり直し**（MTTRを最小化）
-- 🤖 タスク：`wrangler rollback` が使用バージョンで動くか実機確認し、runbook に確定手順を書く
+```
+🧑 承認        … environment: production
+前提の確認     … v タグから起動したこと・to が v タグの名前の形であること（値は形を確かめるまで出さない）・Secret が空でないこと
+戻し先の commit … to のタグを fetch して commit を引く
+install
+① 切り替え     … deploy-worker.ts --env production --rollback-to <commit>
+② smoke        … pnpm smoke --env production --expect-sha <commit>
+```
+
+| 規則 | 理由 |
+|---|---|
+| 起動は `workflow_dispatch` だけ。**v タグを `--ref` にしたときだけ動く** | `production` 環境のデプロイ元の制限（`v*` タグ）と揃える。定義は `--ref` のタグから読まれるので、`rollback.yml` を含むタグ（v0.1.0 は含まない）を選ぶ |
+| 戻し先は入力 `to`（v タグ）。**`inputs.to` を run に式で埋め込まない**。env で渡し、前提の確認で形を確かめる | シェルへの注入。形が違う値は表示もしない（`::` で始まる行を作らせない） |
+| **build・D1 マイグレーション・⓪ 乖離チェックをしない** | 版は配った時点のコード・Static Assets・binding・secret を持つ。wrangler.jsonc も state も使わない |
+| 版は **GIT_SHA（deploy の `--var`）が `to` の commit と一致するもの**を、Worker ごとに直近 10 版から探す。1つでも無ければ何も切り替えない | どの版がどのリリースかを、配ったときの記録で決める。「1つ前のデプロイ」（wrangler rollback の既定）では、途中で落ちた配備や配り直しの後に別のリリースを指す |
+| 向きは **commit が最初に配られた時刻**で決める。古い版へは host → gateway → data-api、新しい版へは data-api → gateway → host。混ざれば切り替えない | 途中の組み合わせを「呼ぶ側が古く、呼ばれる側が新しい」（配っている途中と同じ）に限る。版の作成時刻そのものは、二次手段で古いコードを配り直すと逆転する |
+| 切り替えるたびに、今のデプロイがその版を 100% で向いたことを読んで確かめる。途中で落ちたら止め、同じ `to` の再実行で続きから | wrangler の exit 0 だけを信じない |
+| `concurrency` は `deploy-production` と同じ group で取り消さない | 配っている途中に切り替えない（逆も） |
+| 資格情報：`*_PROD` は ① だけ、`SMOKE_BASE_URL` と `MUSUBI_PROBE_TOKEN`（`SMOKE_PROBE_TOKEN` として）は ② だけ。R2 の3つは使わない。Worker に secret を載せない | §4・§5 と同じ規律。版は配った時点の secret を持つ |
+| wrangler を直接呼ばない。**版の JSON はファイルに受け、版の ID・作成時刻・GIT_SHA だけを出す** | `wrangler versions` / `deployments` の `--json` は `author_email` を含む（2026-09-14 staging で読んで確認）。伏せるものにメールアドレスの形を足した |
+| deploy-worker は wrangler を**空の一時ディレクトリ**で動かし、Worker は `--name` で指す | wrangler は cwd の `.env` を読む。リポジトリ直下で動かすと手元の `.env` の資格情報が黙って使われる |
+
+**wrangler rollback の実機確認**（旧版の 🤖 タスク）：wrangler 4.131.1 のソースで、非対話では message と確認を既定値（yes）で進めること、
+secret が変わった版へは確認を yes にして強制で戻すことを確かめた。production への実行は §6.4 の実演で行う（PR の段階では実環境に書き込まない）。
+使えない場合（Durable Object のクラスの変更・消えた資源・合言葉の変更）は `rollback.md` §1.3。
 
 ### 6.2 D1 のロールバック（**ここが本当の難所**）
 
-**D1にスキーマのロールバック機能は無い。** よって規律で回避する：
+**D1にスキーマのロールバック機能は無い。** よって規律で回避する（**巻き戻さない**。手順の正本は `docs/runbook/d1-migration.md` §4・§5）：
 
 | 規律 | 内容 |
 |---|---|
@@ -406,12 +441,23 @@ gh workflow run rollback.yml -f target_tag=v0.1.0 -f env=production
 | **バックアップ** | production の D1 は `wrangler d1 export` を定期実行し R2 へ（M0では手順書のみ。cron化はM2） |
 | **最後の手段：Time Travel** | 過去の時点へ DB を丸ごと戻す（破壊的・Free は7日まで）。**コードを先に戻す**。戻すと `d1_migrations` も戻り、次の CD で同じ migration が当たり直す（`docs/runbook/d1-migration.md` §5.3） |
 
+- `rollback.yml`（§6.1）は D1 に触れない。二次手段の ① は古いタグの migration しか持たないので何も当たらない
+- **2つ以上前へ戻すときは、その間の migration を目で見直してから戻す**（`d1-migration.md` §4.1）
+
 > **M0のうちにこれを決めておくことの価値**：M2で認証・Community・Membership のスキーマが入る。そこで初めて考えると、必ず一度データを壊す。
 
 ### 6.3 Terraform のロールバック
 
-- R2 はバケットバージョニング未対応。apply 前後に state を別キーへ退避し、復元手順を用意する（H-03）。state の復元だけでは実リソースは戻らないため、復元時は実リソースとの整合も確認する。バックアップと復元検証は `02` の実装タスクであり、現時点では未完了。[R2 S3 API対応表](https://developers.cloudflare.com/r2/api/s3/api/)
+- R2 はバケットバージョニング未対応。**apply 前後に state を別キーへ退避し、退避物から復元できることを確かめる**（H-03）。
+  `infra/scripts/tfstate-backup.sh`（#4 で実装・`infra/terraform/README.md` §3）。[R2 S3 API対応表](https://developers.cloudflare.com/r2/api/s3/api/)
+- **state の復元だけでは実資源は戻らない。** state が壊れたときは退避物を `verify` してから `state push`、実資源を変えてしまったときは
+  前の設定へ revert して apply し直す（🧑・手元から。`rollback.md` §3）
 - **`terraform destroy` は staging/production で禁止**。CIにジョブを作らない、手元でも `-target` 無しの destroy を打たない運用にする
+
+### 6.4 実演（🧑 所有者の立ち会い）
+
+`rollback.yml` を含む v タグが要るので、#17 の PR が main に入った後に行う。手順と記録の表は `rollback.md` §4。
+記録が埋まるまで §8 の「ロールバックを実演した記録がある」は未達。
 
 ---
 

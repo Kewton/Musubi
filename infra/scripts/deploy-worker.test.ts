@@ -11,11 +11,13 @@
 //      （gateway を配る形。@musubi/data-api の dist を読むので、`pnpm test` は turbo run test の後にここを走らせる）
 //   5. ワークフロー：乖離チェック → build → migration → deploy（data-api → gateway → host）→ smoke の順で、
 //      資格情報はそれを使うステップにだけ渡す。staging は main への push と手動実行、production は v タグと手動実行だけで起動する
-//   6. production の資格情報（production 環境の Secret）に届くのは deploy-production.yml だけ。staging のワークフローからは届かない
+//   6. production の資格情報（production 環境の Secret）に届くのは deploy-production.yml と rollback.yml だけ。staging のワークフローからは届かない
+//   7. 巻き戻し（--rollback-to・Issue #17）：版の JSON の読み方、切り替え先と順の決め方、偽の wrangler で読む → 切り替える → 確かめる、
+//      実物の wrangler が呼び方を受け付けること（資格情報を渡さず、認証の手前で止まる）、rollback.yml の形
 //
 // fixture の値は全部作り物で、他と衝突しない目印にしてある。出力に目印が1つでも混ざったら「伏せ損ねた」と判定する。
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -27,25 +29,40 @@ import {
   EXIT_NG,
   EXIT_OK,
   failureLines,
+  matchesSha,
   MIGRATION_CONFIG,
   MIGRATION_DATABASE,
   neutralize,
+  parseCurrentVersion,
+  parseVersionDetail,
+  parseVersionList,
+  planRollback,
   PROBE_TARGETS,
   PROBE_TOKEN_MIN_LENGTH,
   PROBE_TOKEN_SECRET,
+  readCall,
   readSecrets,
   redact,
   REDACTED_ACCOUNT,
+  REDACTED_EMAIL,
   REDACTED_HOST,
   REDACTED_SECRET,
+  ROLLBACK_MESSAGE,
+  rollbackCall,
   runCli,
   secretsFor,
   summarize,
+  SWITCH_ORDER,
   TARGETS,
+  VERSIONS_LISTED,
   WORKER_DIRS,
+  workerName,
   wranglerCall,
   type CliIo,
   type Target,
+  type VersionDetail,
+  type WorkerTarget,
+  type WorkerVersions,
 } from "./deploy-worker.ts";
 import { probeToken } from "./smoke.ts";
 import { ENVS, findTargets } from "./sync-bindings.ts";
@@ -62,7 +79,9 @@ const ACCOUNT_ID = "fixture-account-id-5b3d80a4e1";
 const ACCOUNT_ID_HEX = "9f8e7d6c5b4a39281706f5e4d3c2b1a0";
 /** 目印。production の gateway と host に載せる MUSUBI_PROBE_TOKEN の代わり（ヘッダに載る文字だけで、下限の長さを満たす） */
 const PROBE_TOKEN = "fixture-probe-token-3a9d5e1c7b2f4086";
-const MARKERS = [SUBDOMAIN, ACCOUNT_ID, ACCOUNT_ID_HEX, PROBE_TOKEN];
+/** 目印。版とデプロイの記録（wrangler versions / deployments の --json）に載る author_email の代わり */
+const AUTHOR_EMAIL = "fixture-author-6e2b@example.com";
+const MARKERS = [SUBDOMAIN, ACCOUNT_ID, ACCOUNT_ID_HEX, PROBE_TOKEN, AUTHOR_EMAIL];
 
 /** 伏せ損ねた目印も、workers.dev のホスト名の形も無い。 */
 function expectRedacted(text: string): void {
@@ -986,13 +1005,15 @@ describe("deploy-production.yml", () => {
 
 // ── 6. staging から production の資格情報に手が届かない ─────────────────────────────
 
-describe("production の資格情報に届くのは deploy-production.yml だけ", () => {
+describe("production の資格情報に届くのは deploy-production.yml と rollback.yml だけ", () => {
   /** production 環境にだけ置く Secret（CLAUDE.md「資格情報の置き場所」）。SMOKE_BASE_URL は staging 環境にも同じ名前で置くので含めない */
   const PRODUCTION_SECRETS = ["CLOUDFLARE_API_TOKEN_PROD", "CLOUDFLARE_ACCOUNT_ID_PROD", "MUSUBI_PROBE_TOKEN", "TF_CLOUDFLARE_API_TOKEN_PROD"];
+  /** production 環境を宣言してよいワークフロー。どちらも v* タグからしか動けず、必須レビュワーの承認が要る（04 §5・§6.1） */
+  const PRODUCTION_WORKFLOWS = ["deploy-production.yml", "rollback.yml"];
   const files = readdirSync(join(ROOT, ".github/workflows")).filter((file) => /\.ya?ml$/.test(file));
 
-  it("ワークフローの一覧に deploy-staging.yml と deploy-production.yml がある", () => {
-    expect(files).toEqual(expect.arrayContaining(["deploy-staging.yml", "deploy-production.yml"]));
+  it("ワークフローの一覧に deploy-staging.yml・deploy-production.yml・rollback.yml がある", () => {
+    expect(files).toEqual(expect.arrayContaining(["deploy-staging.yml", ...PRODUCTION_WORKFLOWS]));
   });
 
   it("deploy-staging.yml は production 環境の Secret の名前を1つも書かず（式での比較も含む）、SMOKE_PROBE_TOKEN も渡さない", () => {
@@ -1003,7 +1024,7 @@ describe("production の資格情報に届くのは deploy-production.yml だけ
     expect(staging).not.toMatch(/secrets\[|toJSON\(\s*secrets/);
   });
 
-  it.each(files.filter((file) => file !== "deploy-production.yml"))(
+  it.each(files.filter((file) => !PRODUCTION_WORKFLOWS.includes(file)))(
     "%s は production 環境を宣言せず、production 環境の Secret の名前を書かない",
     (file) => {
       const body = code(readFileSync(join(ROOT, ".github/workflows", file), "utf8"));
@@ -1016,4 +1037,722 @@ describe("production の資格情報に届くのは deploy-production.yml だけ
       }
     },
   );
+});
+
+// ── 7. 巻き戻し（--rollback-to・rollback.yml）──────────────────────────────────────
+
+/** 作り物の commit。OLD → NEW → NEWER の順に production へ出た */
+const SHA_OLD = "a1".repeat(20);
+const SHA_NEW = "b2".repeat(20);
+const SHA_NEWER = "c3".repeat(20);
+
+interface Release {
+  readonly sha: string | undefined;
+  readonly at: string;
+}
+
+/** 1つ前のリリース（OLD）と今のリリース（NEW） */
+const RELEASES: readonly Release[] = [
+  { sha: SHA_OLD, at: "2026-09-14T14:25:00.000000Z" },
+  { sha: SHA_NEW, at: "2026-09-15T01:00:00.000000Z" },
+];
+
+/** Worker の番号（SWITCH_ORDER.forward の位置）と、何番目に配った版か から、版の ID を作る */
+const versionId = (worker: number, n: number): string => `0000000${worker}-0000-4000-8000-${String(n).padStart(12, "0")}`;
+
+function nth<T>(items: readonly T[], index: number): T {
+  const item = items[index];
+  if (item === undefined) throw new Error(`index ${index} が無い`);
+  return item;
+}
+
+/** 各 Worker に releases を1つずつ配った版の履歴。今の版は currentIndex（無ければ最後に配った版） */
+function workerVersions(currentIndex: Partial<Record<WorkerTarget, number>>, releases: readonly Release[] = RELEASES): WorkerVersions[] {
+  return SWITCH_ORDER.forward.map((target, w) => {
+    const versions: VersionDetail[] = releases.map((r, i) => ({ id: versionId(w, i), createdOn: r.at, gitSha: r.sha }));
+    return { target, name: `musubi-production-${target}`, current: nth(versions, currentIndex[target] ?? releases.length - 1), versions };
+  });
+}
+
+const HAIR = String.fromCharCode(0x200a);
+
+/** wrangler 4.131.1 の `wrangler rollback <id> --yes`（非対話）の出力の形。ソース（src/versions/rollback）から組み立てた。実物は実環境に届くので試験では動かさない */
+const rollbackOutput = (previous: string, id: string, message: string): string =>
+  [
+    "",
+    " ⛅️ wrangler 4.131.1",
+    "────────────────────",
+    "├ Your current deployment has 1 version(s):",
+    "│",
+    `│ (100%) ${previous}`,
+    "│       Created:  2026-09-15T01:00:00.000000Z",
+    "│           Tag:  -",
+    "│       Message:  -",
+    "│",
+    "? Please provide an optional message for this rollback (120 characters max)",
+    `🤖 Using default value in non-interactive context: ${message}`,
+    "│",
+    `├${HAIR} WARNING ${HAIR}You are about to rollback to Worker Version ${id}.`,
+    `│${HAIR}This will immediately replace the current deployment and become the active deployment across all your deployed triggers.`,
+    `│${HAIR}Rolling back to a previous deployment will not rollback any of the bound resources (Durable Object, D1, R2, KV, etc).`,
+    "│",
+    `│ (100%) ${id}`,
+    "│       Created:  2026-09-14T14:25:00.000000Z",
+    "│           Tag:  -",
+    "│       Message:  -",
+    "│",
+    "? Are you sure you want to deploy this Worker Version to 100% of traffic?",
+    "🤖 Using fallback value in non-interactive context: yes",
+    "Performing rollback...",
+    "│",
+    `╰${HAIR} SUCCESS ${HAIR}Worker Version ${id} has been deployed to 100% of traffic.`,
+    "",
+    `Current Version ID: ${id}`,
+    "",
+  ].join("\n");
+
+describe("巻き戻し：版の JSON を読む", () => {
+  const id = versionId(0, 0);
+  const view = (bindings: unknown[]): string =>
+    JSON.stringify({
+      id,
+      number: 3,
+      metadata: { created_on: "2026-09-14T14:25:00.000000Z", source: "wrangler", author_email: AUTHOR_EMAIL },
+      annotations: { "workers/triggered_by": "upload" },
+      resources: { script: {}, script_runtime: {}, bindings },
+    });
+
+  it("deployments status：100% を向けている版の ID", () => {
+    const status = { id: "d", author_email: AUTHOR_EMAIL, versions: [{ version_id: id, percentage: 100 }], created_on: "2026-09-14T14:25:00Z" };
+    expect(parseCurrentVersion(JSON.stringify(status))).toBe(id);
+  });
+
+  it.each([
+    ["段階的デプロイの途中（2つの版に分けている）", { versions: [{ version_id: id, percentage: 50 }, { version_id: versionId(0, 1), percentage: 50 }] }, "段階的デプロイの途中"],
+    ["versions が無い", { author_email: AUTHOR_EMAIL }, "versions が無い"],
+    ["版の ID の形でない", { versions: [{ version_id: "--help", percentage: 100 }] }, "version_id"],
+  ])("deployments status：%s なら落とす", (_, status, message) => {
+    expect(() => parseCurrentVersion(JSON.stringify(status))).toThrow(message);
+  });
+
+  it("JSON でなければ、中身（author_email を含みうる）を出さずに落とす", () => {
+    let error: unknown;
+    try {
+      parseCurrentVersion(`{ "author_email": "${AUTHOR_EMAIL}", `);
+    } catch (e) {
+      error = e;
+    }
+    expect((error as Error).message).toContain("JSON として読めない");
+    expect((error as Error).message).not.toContain(AUTHOR_EMAIL);
+  });
+
+  it("versions list：新しい版から並べる。形が違えば落とす", () => {
+    const list = [0, 1, 2].map((n) => ({ id: versionId(0, n), metadata: { created_on: `2026-09-1${n + 3}T00:00:00Z`, author_email: AUTHOR_EMAIL } }));
+    expect(parseVersionList(JSON.stringify(list)).map((v) => v.id)).toEqual([versionId(0, 2), versionId(0, 1), versionId(0, 0)]);
+    expect(() => parseVersionList(JSON.stringify([{ id: "x", metadata: {} }]))).toThrow("形が想定と違う");
+    expect(() => parseVersionList("{}")).toThrow("配列でない");
+  });
+
+  it("versions view：binding GIT_SHA（plain_text）の値を読む", () => {
+    const detail = parseVersionDetail(
+      view([
+        { name: "ENVIRONMENT", type: "plain_text", text: "production" },
+        { name: "GIT_SHA", type: "plain_text", text: SHA_OLD.toUpperCase() },
+        { name: "MUSUBI_PROBE_TOKEN", type: "secret_text" },
+      ]),
+    );
+    expect(detail).toEqual({ id, createdOn: "2026-09-14T14:25:00.000000Z", gitSha: SHA_OLD });
+  });
+
+  it.each([
+    ["GIT_SHA が無い", []],
+    ["--var を付けずに配った（\"local\"）", [{ name: "GIT_SHA", type: "plain_text", text: "local" }]],
+    ["plain_text でない", [{ name: "GIT_SHA", type: "secret_text" }]],
+  ])("versions view：%s なら GIT_SHA は無いものとして扱う", (_, bindings) => {
+    expect(parseVersionDetail(view(bindings)).gitSha).toBeUndefined();
+  });
+
+  it("GIT_SHA は先頭 7 桁以上で照合する（大文字でもよい）", () => {
+    expect(matchesSha(SHA_OLD, SHA_OLD.slice(0, 7).toUpperCase())).toBe(true);
+    expect(matchesSha(SHA_OLD, SHA_NEW)).toBe(false);
+    expect(matchesSha(undefined, SHA_OLD)).toBe(false);
+  });
+});
+
+/** 切り替える順に「Worker:版」 */
+const ids = (plan: ReturnType<typeof planRollback>): string[] => plan.switches.map((s) => `${s.target}:${s.to.id}`);
+
+describe("巻き戻し：切り替え先と順を決める（planRollback）", () => {
+  it("切り替える順：新しい版へは配る順（deploy-production.yml の deploy の並び）、古い版へはその逆", () => {
+    const { steps } = readWorkflow("deploy-production.yml");
+    const deployed = steps.map((step) => deployWorkerTarget(step)).filter((t): t is WorkerTarget => t !== undefined && t !== "migrate");
+    expect(SWITCH_ORDER.forward).toEqual(deployed);
+    expect(SWITCH_ORDER.back).toEqual(deployed.toReversed());
+  });
+
+  it("1つ前へ戻す：3つとも OLD の版へ、host → gateway → data-api の順", () => {
+    const plan = planRollback(workerVersions({}), SHA_OLD);
+    expect(plan.direction).toBe("back");
+    expect(ids(plan)).toEqual([`host:${versionId(2, 0)}`, `gateway:${versionId(1, 0)}`, `data-api:${versionId(0, 0)}`]);
+    expect(plan.unchanged).toEqual([]);
+  });
+
+  it("新しい版へ戻す（復帰）：3つとも NEW の版へ、data-api → gateway → host の順", () => {
+    const plan = planRollback(workerVersions({ "data-api": 0, gateway: 0, host: 0 }), SHA_NEW);
+    expect(plan.direction).toBe("forward");
+    expect(ids(plan)).toEqual([`data-api:${versionId(0, 1)}`, `gateway:${versionId(1, 1)}`, `host:${versionId(2, 1)}`]);
+  });
+
+  it("既に切り替え先の版なら、何も切り替えない", () => {
+    const plan = planRollback(workerVersions({}), SHA_NEW.slice(0, 7));
+    expect(plan).toEqual({ direction: undefined, switches: [], unchanged: ["data-api", "gateway", "host"] });
+  });
+
+  it("配っている途中で落ちた（host だけ OLD のまま）：OLD へ戻すなら host は飛ばし、gateway → data-api", () => {
+    const plan = planRollback(workerVersions({ host: 0 }), SHA_OLD);
+    expect(plan.direction).toBe("back");
+    expect(plan.switches.map((s) => s.target)).toEqual(["gateway", "data-api"]);
+    expect(plan.unchanged).toEqual(["host"]);
+  });
+
+  it("同じ commit の版が複数あれば、いちばん新しい版へ切り替える", () => {
+    const releases = [...RELEASES, { sha: SHA_OLD, at: "2026-09-15T02:00:00Z" }, { sha: SHA_NEW, at: "2026-09-15T03:00:00Z" }];
+    const plan = planRollback(workerVersions({}, releases), SHA_OLD);
+    expect(plan.direction).toBe("back");
+    expect(plan.switches.map((s) => s.to.id)).toEqual([versionId(2, 2), versionId(1, 2), versionId(0, 2)]);
+  });
+
+  it("二次手段で OLD を配り直した後に NEW へ進める：版は NEW のほうが古いが、commit が最初に配られた順で「新しい版へ」と決める", () => {
+    const releases = [...RELEASES, { sha: SHA_OLD, at: "2026-09-15T02:00:00Z" }];
+    const plan = planRollback(workerVersions({}, releases), SHA_NEW);
+    expect(plan.direction).toBe("forward");
+    expect(ids(plan)).toEqual([`data-api:${versionId(0, 1)}`, `gateway:${versionId(1, 1)}`, `host:${versionId(2, 1)}`]);
+  });
+
+  it("GIT_SHA の無い今の版（手で配った版）からは、版の作成時刻で比べる", () => {
+    const releases = [...RELEASES, { sha: undefined, at: "2026-09-15T02:00:00Z" }];
+    expect(planRollback(workerVersions({}, releases), SHA_NEW).direction).toBe("back");
+  });
+
+  it("切り替え先の版が1つでも見つからなければ、何も切り替えずに落とす（二次手段へ）", () => {
+    const releases = [...RELEASES, { sha: SHA_NEWER, at: "2026-09-15T02:00:00Z" }];
+    const workers = workerVersions({}, RELEASES).map((w) => (w.target === "host" ? workerVersions({}, releases)[2] ?? w : w));
+    expect(() => planRollback(workers, SHA_NEWER)).toThrow(/見つからない：data-api, gateway（直近 10 版まで探した）。何も切り替えない。二次手段/);
+    expect(VERSIONS_LISTED).toBe(10);
+  });
+
+  it("古い版へ戻す Worker と新しい版へ進める Worker が混ざっていれば、何も切り替えずに落とす", () => {
+    const releases = [...RELEASES, { sha: SHA_NEWER, at: "2026-09-15T02:00:00Z" }];
+    // data-api は NEWER、gateway は NEW、host は OLD。NEW へ切り替えるなら data-api は戻し、host は進める
+    const workers = workerVersions({ "data-api": 2, gateway: 1, host: 0 }, releases);
+    expect(() => planRollback(workers, SHA_NEW)).toThrow("古い版へ戻す Worker（data-api）と新しい版へ進める Worker（host）が混ざっている");
+  });
+});
+
+describe("巻き戻し：wrangler の呼び方", () => {
+  it.each(ENVS)("Worker の名前は wrangler.jsonc の env.%s.name（musubi-<env>-<Worker>）", (env) => {
+    for (const target of SWITCH_ORDER.forward) {
+      expect(workerName(ROOT, target, env)).toBe(`musubi-${env}-${target}`);
+    }
+  });
+
+  it("版を読む呼び方は --name と --json。設定の無い一時ディレクトリで動かし、secret は載せない", () => {
+    const name = "musubi-production-host";
+    const id = versionId(2, 0);
+    expect(readCall.status(name)).toEqual({ kind: "read", cwd: null, args: ["deployments", "status", "--name", name, "--json"], secrets: [] });
+    expect(readCall.list(name)).toEqual({ kind: "read", cwd: null, args: ["versions", "list", "--name", name, "--json"], secrets: [] });
+    expect(readCall.view(name, id)).toEqual({ kind: "read", cwd: null, args: ["versions", "view", id, "--name", name, "--json"], secrets: [] });
+  });
+
+  it("切り替える呼び方は wrangler rollback <版> --name --message --yes。message は 120 文字以内", () => {
+    const call = rollbackCall("musubi-production-host", versionId(2, 0), SHA_OLD);
+    expect(call).toEqual({
+      kind: "rollback",
+      cwd: null,
+      args: ["rollback", versionId(2, 0), "--name", "musubi-production-host", "--message", `${ROLLBACK_MESSAGE} ${SHA_OLD}`, "--yes"],
+      secrets: [],
+    });
+    expect(`${ROLLBACK_MESSAGE} ${SHA_OLD}`.length).toBeLessThanOrEqual(120);
+    expect(() => rollbackCall("musubi-production-host", "--help", SHA_OLD)).toThrow("版の ID の形でない");
+  });
+
+  it("要約：rollback は切り替え前後の版・既定値で進めたこと・切り替えた結果を出す", () => {
+    const previous = versionId(2, 1);
+    const id = versionId(2, 0);
+    const lines = summarize("rollback", rollbackOutput(previous, id, `${ROLLBACK_MESSAGE} ${SHA_OLD}`), ACCOUNT_ID);
+    expect(lines).toEqual([
+      "├ Your current deployment has 1 version(s):",
+      `│ (100%) ${previous}`,
+      "│       Created:  2026-09-15T01:00:00.000000Z",
+      `🤖 Using default value in non-interactive context: ${ROLLBACK_MESSAGE} ${SHA_OLD}`,
+      `├${HAIR} WARNING ${HAIR}You are about to rollback to Worker Version ${id}.`,
+      `│ (100%) ${id}`,
+      "│       Created:  2026-09-14T14:25:00.000000Z",
+      "🤖 Using fallback value in non-interactive context: yes",
+      "Performing rollback...",
+      `╰${HAIR} SUCCESS ${HAIR}Worker Version ${id} has been deployed to 100% of traffic.`,
+      `Current Version ID: ${id}`,
+    ]);
+  });
+
+  it("要約：secret が変わった版へ戻すときは、変わった secret の名前（値ではない）も出す", () => {
+    const text = [
+      `? The following secrets have changed since version ${versionId(2, 0)} was deployed. Please confirm you wish to continue with the rollback`,
+      "  * MUSUBI_PROBE_TOKEN",
+      "🤖 Using fallback value in non-interactive context: yes",
+    ].join("\n");
+    expect(summarize("rollback", text)).toEqual(text.split("\n"));
+  });
+
+  it("伏せる：メールアドレスの形（author_email）", () => {
+    expect(redact(`Author: ${AUTHOR_EMAIL}`)).toBe(`Author: ${REDACTED_EMAIL}`);
+  });
+});
+
+/** 偽の wrangler が記録した1回の呼び出し */
+interface Call {
+  args: string[];
+  cwd: string;
+  probeTokenEnv?: string;
+  forceColor?: string;
+}
+
+/** rollback の呼び出しの --name（切り替えた順） */
+const switched = (calls: readonly Call[]): string[] => calls.filter((c) => c.args[0] === "rollback").map((c) => c.args[3] ?? "");
+
+describe("CLI：--rollback-to（偽の wrangler）", () => {
+  let dir: string;
+  let fake: string;
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "deploy-worker-rollback-test-"));
+    fake = join(dir, "fake-wrangler-rollback.mjs");
+    // FAKE_STATE の版の履歴を持つ Cloudflare の代わり。受けた呼び出しを FAKE_CALLS に1行ずつ記録する。
+    // rollback は今の版を書き換える（failRollback は exit 1、ignoreRollback は exit 0 なのに書き換えない）
+    writeFileSync(
+      fake,
+      [
+        'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
+        "const { FAKE_STATE, FAKE_CALLS } = process.env;",
+        "const state = JSON.parse(readFileSync(FAKE_STATE, 'utf8'));",
+        "const args = process.argv.slice(2);",
+        "appendFileSync(FAKE_CALLS, JSON.stringify({ args, cwd: process.cwd(), probeTokenEnv: process.env.MUSUBI_PROBE_TOKEN, forceColor: process.env.FORCE_COLOR }) + '\\n');",
+        "const name = args[args.indexOf('--name') + 1];",
+        "const worker = state.workers[name];",
+        "if (worker === undefined) { process.stderr.write(`✘ [ERROR] A request to the Cloudflare API (/accounts/${state.accountId}/workers/scripts/${name}) failed.\\n`); process.exit(1); }",
+        "const meta = (v) => ({ id: v.id, number: 1, metadata: { created_on: v.created_on, source: 'wrangler', author_id: 'fixture', author_email: state.author, has_preview: false }, annotations: { 'workers/triggered_by': 'upload' } });",
+        "const json = (value) => process.stdout.write(JSON.stringify(value, null, 2) + '\\n');",
+        "if (args[0] === 'deployments' && args[1] === 'status') {",
+        "  if (state.brokenStatus === name) { process.stdout.write(`{ \"author_email\": \"${state.author}\", `); process.exit(0); }",
+        "  json({ id: 'deployment', source: 'wrangler', strategy: 'percentage', author_email: state.author, annotations: {}, versions: [{ version_id: worker.current, percentage: 100 }], created_on: '2026-09-15T00:00:00Z' });",
+        "} else if (args[0] === 'versions' && args[1] === 'list') {",
+        "  json(worker.versions.map(meta));",
+        "} else if (args[0] === 'versions' && args[1] === 'view') {",
+        "  const v = worker.versions.find((x) => x.id === args[2]);",
+        "  const bindings = [{ name: 'ENVIRONMENT', type: 'plain_text', text: 'production' }, ...(v.sha ? [{ name: 'GIT_SHA', type: 'plain_text', text: v.sha }] : []), { name: 'MUSUBI_PROBE_TOKEN', type: 'secret_text' }];",
+        "  json({ ...meta(v), resources: { script: { handlers: ['fetch'] }, script_runtime: { compatibility_date: '2026-09-01' }, bindings } });",
+        "} else if (args[0] === 'rollback') {",
+        "  if (state.failRollback === name) { process.stderr.write(state.failOutput); process.exit(1); }",
+        "  const previous = worker.current;",
+        "  if (state.ignoreRollback !== name) { worker.current = args[1]; writeFileSync(FAKE_STATE, JSON.stringify(state)); }",
+        "  process.stdout.write(state.rollbackOutput.replaceAll('{previous}', previous).replaceAll('{id}', args[1]).replaceAll('{message}', args[args.indexOf('--message') + 1]));",
+        "} else { process.stderr.write('unknown command\\n'); process.exit(2); }",
+      ].join("\n"),
+    );
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  interface FakeState {
+    accountId: string;
+    author: string;
+    rollbackOutput: string;
+    failOutput: string;
+    workers: Record<string, { current: string; versions: { id: string; created_on: string; sha: string | undefined }[] }>;
+    failRollback?: string;
+    ignoreRollback?: string;
+    brokenStatus?: string;
+  }
+
+  function fakeState(currentIndex: Partial<Record<WorkerTarget, number>>, extra: Partial<FakeState> = {}): FakeState {
+    return {
+      accountId: ACCOUNT_ID_HEX,
+      author: AUTHOR_EMAIL,
+      rollbackOutput: rollbackOutput("{previous}", "{id}", "{message}"),
+      failOutput: [
+        `✘ [ERROR] A request to the Cloudflare API (/accounts/${ACCOUNT_ID}/workers/scripts/musubi-production-gateway/deployments) failed.`,
+        `  Version was uploaded by ${AUTHOR_EMAIL} at https://musubi-production-gateway.${SUBDOMAIN}.workers.dev [code: 10000]`,
+        "::error::injected by a response",
+        "",
+      ].join("\n"),
+      workers: Object.fromEntries(
+        SWITCH_ORDER.forward.map((target, w) => [
+          `musubi-production-${target}`,
+          {
+            current: versionId(w, currentIndex[target] ?? RELEASES.length - 1),
+            versions: RELEASES.map((r, i) => ({ id: versionId(w, i), created_on: r.at, sha: r.sha })),
+          },
+        ]),
+      ),
+      ...extra,
+    };
+  }
+
+  let seq = 0;
+  async function rollback(argv: readonly string[], state: FakeState) {
+    const statePath = join(dir, `state-${++seq}.json`);
+    const callsPath = join(dir, `calls-${seq}.jsonl`);
+    writeFileSync(statePath, JSON.stringify(state));
+    writeFileSync(callsPath, "");
+    const out: string[] = [];
+    const err: string[] = [];
+    const exit = await runCli(argv, {
+      root: ROOT,
+      wrangler: [process.execPath, fake],
+      env: { CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID, RUNNER_TEMP: dir, FAKE_STATE: statePath, FAKE_CALLS: callsPath, [PROBE_TOKEN_SECRET]: PROBE_TOKEN },
+      out: (line) => out.push(line),
+      err: (line) => err.push(line),
+    });
+    const calls = readFileSync(callsPath, "utf8")
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => JSON.parse(line) as Call);
+    const after = JSON.parse(readFileSync(statePath, "utf8")) as FakeState;
+    const currents = Object.fromEntries(SWITCH_ORDER.forward.map((t) => [t, after.workers[`musubi-production-${t}`]?.current]));
+    return { code: exit, out, err, all: [...out, ...err].join("\n"), calls, currents };
+  }
+
+  const allAt = (n: number) => Object.fromEntries(SWITCH_ORDER.forward.map((t, w) => [t, versionId(w, n)]));
+  const leftoverEmptyDirs = (): string[] => readdirSync(dir).filter((name) => name.startsWith("deploy-worker-rollback-"));
+
+  it("1つ前へ戻す：版を読み、host → gateway → data-api の順に切り替え、1つずつ確かめて exit 0", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}));
+    expect(run.code, run.all).toBe(EXIT_OK);
+    expect(switched(run.calls)).toEqual(["musubi-production-host", "musubi-production-gateway", "musubi-production-data-api"]);
+    expect(run.currents).toEqual(allAt(0));
+    for (const [w, target] of SWITCH_ORDER.forward.entries()) {
+      const call = run.calls.find((c) => c.args[0] === "rollback" && c.args[3] === `musubi-production-${target}`);
+      expect(call?.args).toEqual(rollbackCall(`musubi-production-${target}`, versionId(w, 0), SHA_OLD).args);
+    }
+    // 切り替えのたびに、今のデプロイを読み直す
+    const afterFirstSwitch = run.calls.slice(run.calls.findIndex((c) => c.args[0] === "rollback") + 1)[0];
+    expect(afterFirstSwitch?.args).toEqual(readCall.status("musubi-production-host").args);
+
+    expect(run.out).toContain("deploy-worker: 古い版へ戻す。順は host → gateway → data-api");
+    expect(run.out).toContain(`  Current Version ID: ${versionId(2, 0)}`);
+    expect(run.out).toContain(`deploy-worker: host: 今のデプロイが ${versionId(2, 0)} を 100% で向いていることを確かめた`);
+    expect(run.out.at(-1)).toMatch(new RegExp(`^deploy-worker: OK {2}rollback（env=production）: 3つの Worker が GIT_SHA ${SHA_OLD} の版で動いている（切り替え \\d+ 秒）$`));
+    expectRedacted(run.all);
+    expectNoWorkflowCommand(run.out);
+  });
+
+  it("wrangler はリポジトリの外の空の一時ディレクトリで動かし（.env を読ませない）、終わったら消す。secret の環境変数も色も渡さない", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}));
+    expect(run.code, run.all).toBe(EXIT_OK);
+    const cwds = new Set(run.calls.map((c) => c.cwd));
+    expect(cwds.size).toBe(1);
+    const [cwd] = [...cwds];
+    // macOS の tmpdir はシンボリックリンク越し。子プロセスの cwd は実体のパスで見える
+    expect(dirname(cwd ?? "")).toBe(realpathSync(dir));
+    expect(cwd?.startsWith(ROOT)).toBe(false);
+    expect(leftoverEmptyDirs()).toEqual([]);
+    for (const call of run.calls) {
+      expect(call.probeTokenEnv).toBeUndefined();
+      expect(call.forceColor).toBe("0");
+      expect(call.args).not.toContain("--secrets-file");
+    }
+  });
+
+  it("新しい版へ戻す（復帰）：data-api → gateway → host の順", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_NEW], fakeState({ "data-api": 0, gateway: 0, host: 0 }));
+    expect(run.code, run.all).toBe(EXIT_OK);
+    expect(switched(run.calls)).toEqual(["musubi-production-data-api", "musubi-production-gateway", "musubi-production-host"]);
+    expect(run.currents).toEqual(allAt(1));
+    expect(run.out).toContain("deploy-worker: 新しい版へ進める。順は data-api → gateway → host");
+  });
+
+  it("既に切り替え先の版なら、版の一覧も読まず、何も切り替えずに exit 0", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_NEW.slice(0, 12)], fakeState({}));
+    expect(run.code, run.all).toBe(EXIT_OK);
+    expect(run.calls.map((c) => `${c.args[0]} ${c.args[1]}`)).toEqual(Array.from({ length: 3 }, () => ["deployments status", "versions view"]).flat());
+    expect(run.out.at(-1)).toContain("切り替えるものは無い");
+  });
+
+  it("配っている途中で落ちた（host だけ OLD）：OLD へ戻すなら host を飛ばす", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({ host: 0 }));
+    expect(run.code, run.all).toBe(EXIT_OK);
+    expect(switched(run.calls)).toEqual(["musubi-production-gateway", "musubi-production-data-api"]);
+    expect(run.out).toContain("deploy-worker: 古い版へ戻す。順は gateway → data-api（host は既に切り替え先の版なので飛ばす）");
+  });
+
+  it("切り替え先の版が見つからなければ、何も切り替えずに exit 1（二次手段へ）", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_NEWER], fakeState({}));
+    expect(run.code).toBe(EXIT_NG);
+    expect(switched(run.calls)).toEqual([]);
+    expect(run.err[0]).toContain("版が見つからない：data-api, gateway, host");
+    expect(run.err[0]).toContain("二次手段");
+    expect(run.out.at(-1)).toBe("deploy-worker: NG  rollback（env=production）");
+    expectRedacted(run.all);
+  });
+
+  it("途中で rollback が落ちたら止め、どこまで切り替えたかを出して exit 1。同じ --rollback-to でもう一度動かすと続きから切り替える", async () => {
+    const failed = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { failRollback: "musubi-production-gateway" }));
+    expect(failed.code).toBe(EXIT_NG);
+    expect(switched(failed.calls)).toEqual(["musubi-production-host", "musubi-production-gateway"]);
+    expect(failed.currents).toEqual({ "data-api": versionId(0, 1), gateway: versionId(1, 1), host: versionId(2, 0) });
+    expect(failed.out).toContainEqual(expect.stringContaining("deploy-worker: 切り替え済み：host。未切り替え：gateway, data-api。"));
+    expect(failed.out).toContainEqual(expect.stringContaining(`/accounts/${REDACTED_ACCOUNT}/workers/scripts/musubi-production-gateway/deployments`));
+    expect(failed.err[0]).toBe("deploy-worker: gateway の rollback に失敗した（上の出力）");
+    expectRedacted(failed.all);
+    expectNoWorkflowCommand(failed.out);
+
+    // 続き：host は既に OLD なので飛ばし、gateway → data-api
+    const resumed = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({ host: 0 }));
+    expect(resumed.code, resumed.all).toBe(EXIT_OK);
+    expect(switched(resumed.calls)).toEqual(["musubi-production-gateway", "musubi-production-data-api"]);
+  });
+
+  it("rollback が exit 0 でも今のデプロイが切り替わっていなければ、止めて exit 1", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { ignoreRollback: "musubi-production-host" }));
+    expect(run.code).toBe(EXIT_NG);
+    expect(switched(run.calls)).toEqual(["musubi-production-host"]);
+    expect(run.err[0]).toContain("host: rollback の後も、今のデプロイが切り替え先の版を向いていない");
+    expect(run.out).toContainEqual(expect.stringContaining("切り替え済み：なし。未切り替え：host, gateway, data-api。"));
+  });
+
+  it("版の JSON が読めなければ、中身を出さずに、何も切り替えずに exit 1", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}, { brokenStatus: "musubi-production-data-api" }));
+    expect(run.code).toBe(EXIT_NG);
+    expect(switched(run.calls)).toEqual([]);
+    expect(run.err[0]).toContain("wrangler deployments status --json の出力が JSON として読めない");
+    expectRedacted(run.all);
+  });
+
+  it("版の JSON（author_email を含む）はファイルに受け、ログには出さない", async () => {
+    const run = await rollback(["--env", "production", "--rollback-to", SHA_OLD], fakeState({}));
+    expect(run.code, run.all).toBe(EXIT_OK);
+    const kept = readdirSync(dir).filter((name) => /^deploy-worker-production-rollback-\d+\.json$/.test(name));
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.some((name) => readFileSync(join(dir, name), "utf8").includes(AUTHOR_EMAIL))).toBe(true);
+    expect(run.all).not.toContain(AUTHOR_EMAIL);
+  });
+
+  it.each([
+    ["--target と一緒", ["--env", "production", "--rollback-to", SHA_OLD, "--target", "host"], "--rollback-to は --target・--sha と一緒に使わない"],
+    ["--sha と一緒", ["--env", "production", "--rollback-to", SHA_OLD, "--sha", SHA_OLD], "--rollback-to は --target・--sha と一緒に使わない"],
+    ["SHA でない（値を出さない）", ["--env", "production", "--rollback-to", SUBDOMAIN], "--rollback-to は 7〜40 桁の 16 進"],
+    ["--env が無い", ["--rollback-to", SHA_OLD], "--env が無い"],
+  ])("引数の誤り（%s）は wrangler を起動せずに exit 1", async (_, argv, message) => {
+    const run = await rollback(argv, fakeState({}));
+    expect(run.code).toBe(EXIT_NG);
+    expect(run.calls).toEqual([]);
+    expect(run.err[0]).toContain(`deploy-worker: ${message}`);
+    expectRedacted(run.all);
+  });
+
+  it(
+    "実物の wrangler も、版を読む・切り替える呼び方を受け付ける（資格情報を渡さないので、認証の手前で止まり Cloudflare に届かない）",
+    () => {
+      const bin = join(dirname(createRequire(import.meta.url).resolve("wrangler/package.json")), "bin", "wrangler.js");
+      const home = mkdtempSync(join(dir, "home-"));
+      const name = workerName(ROOT, "host", "production");
+      const id = versionId(2, 0);
+      for (const call of [readCall.status(name), readCall.list(name), readCall.view(name, id), rollbackCall(name, id, SHA_OLD)]) {
+        const result = spawnSync(process.execPath, [bin, ...call.args], {
+          cwd: home,
+          env: { PATH: process.env["PATH"], HOME: home, WRANGLER_SEND_METRICS: "false", FORCE_COLOR: "0" },
+          stdio: ["ignore", "pipe", "pipe"],
+          encoding: "utf8",
+        });
+        const output = `${result.stdout}${result.stderr}`;
+        expect(result.status, `${call.args.join(" ")}\n${output}`).toBe(1);
+        expect(output).not.toMatch(/Unknown argument/i);
+        expect(output).toContain("it's necessary to set a CLOUDFLARE_API_TOKEN environment variable");
+      }
+    },
+    60_000,
+  );
+});
+
+/** ステップの run の本文（`run: |` の塊か、1行の `run:`）。 */
+const runOf = (step: Step): string =>
+  /^\s+(?:- )?run: \|$/m.test(step.body) ? runScript(step) : (step.body.match(/^\s+(?:- )?run: (.+)$/m)?.[1] ?? "");
+
+describe("rollback.yml", () => {
+  const { yaml, steps, indexOf } = readWorkflow("rollback.yml");
+
+  it("起動は手動実行だけ（to は必須の文字列）。push・schedule・pull_request では起動しない", () => {
+    expect(code(yaml)).toMatch(/^on:\n {2}workflow_dispatch:\n {4}inputs:\n {6}to:\n/m);
+    const input = code(yaml).match(/^ {6}to:\n((?: {8}.+\n)+)/m)?.[1] ?? "";
+    expect(input).toMatch(/^ {8}required: true$/m);
+    expect(input).toMatch(/^ {8}type: string$/m);
+    expect(code(yaml)).not.toMatch(/^\s+push:|schedule|pull_request|branches/m);
+  });
+
+  it("前提の確認：v タグから起動したときだけ動く", () => {
+    const preflight = steps[0] ?? { body: "" };
+    const allSet = Object.fromEntries([...preflight.body.matchAll(/^\s+(HAS_[A-Z0-9_]+):/gm)].map((m) => [m[1] ?? "", "true"]));
+    expect(runPreflight(preflight, { ...allSet, REF: "refs/tags/v0.1.1", TO: "v0.1.0" }).code).toBe(0);
+    for (const ref of ["refs/heads/main", "refs/tags/0.1.1", "refs/pull/1/merge"]) {
+      const run = runPreflight(preflight, { ...allSet, REF: ref, TO: "v0.1.0" });
+      expect(run.code, ref).toBe(1);
+      expect(run.output).toContain("::error::production を切り替えるのは v タグから起動したときだけ");
+    }
+  });
+
+  it("前提の確認：to が v タグの名前の形でなければ、値を表示せずに落とす", () => {
+    const preflight = steps[0] ?? { body: "" };
+    const allSet = Object.fromEntries([...preflight.body.matchAll(/^\s+(HAS_[A-Z0-9_]+):/gm)].map((m) => [m[1] ?? "", "true"]));
+    for (const to of ["", "0.9.9", "main", "v0.9.9; id", "v0.9.9\n::warning::injected", "$(id)", `v${"9".repeat(70)}`, "-v9"]) {
+      const run = runPreflight(preflight, { ...allSet, REF: "refs/tags/v0.1.1", TO: to });
+      expect(run.code, JSON.stringify(to)).toBe(1);
+      expect(run.output).toContain("::error::to は v タグの名前");
+      if (to !== "") expect(run.output).not.toContain(to);
+    }
+  });
+
+  it("前提の確認：Secret が1つでも空なら、名前を挙げて落とす（値は受け取らない）", () => {
+    const preflight = steps[0] ?? { body: "" };
+    const names = [...preflight.body.matchAll(/^\s+HAS_([A-Z0-9_]+):/gm)].map((m) => m[1] ?? "");
+    expect(names.toSorted()).toEqual(["CLOUDFLARE_ACCOUNT_ID_PROD", "CLOUDFLARE_API_TOKEN_PROD", "MUSUBI_PROBE_TOKEN", "SMOKE_BASE_URL"]);
+    for (const missing of names) {
+      const env = Object.fromEntries(names.map((name) => [`HAS_${name}`, name === missing ? "false" : "true"]));
+      const run = runPreflight(preflight, { ...env, REF: "refs/tags/v0.1.1", TO: "v0.1.0" });
+      expect(run.code, missing).toBe(1);
+      expect(run.output).toContain(`::error::${missing} が空`);
+    }
+  });
+
+  it("concurrency は deploy-production と同じ group で取り消さない。permissions は読み取りだけ", () => {
+    expect(code(yaml)).toContain("concurrency: { group: deploy-production, cancel-in-progress: false }");
+    expect(code(readFileSync(join(ROOT, ".github/workflows/deploy-production.yml"), "utf8"))).toContain("concurrency: { group: deploy-production,");
+    expect(code(yaml)).toMatch(/^permissions:\n {2}contents: read\n\n/m);
+    expect(code(yaml)).not.toMatch(/: write\b/);
+  });
+
+  it("production 環境を宣言し（承認待ちと本番の Secret はここから）、url は書かない", () => {
+    expect(code(yaml)).toMatch(/^ {4}environment: production$/m);
+    expect(code(yaml).match(/environment:/g)).toHaveLength(1);
+    expect(code(yaml)).not.toMatch(/^\s+url:/m);
+  });
+
+  it("前提の確認 → checkout → 切り替え先の commit → install → 切り替え → smoke の順。build・migration・乖離チェック・deploy はしない", () => {
+    const order = [
+      indexOf(/refs\/tags\/v\*/),
+      indexOf(/actions\/checkout@/),
+      indexOf(/git rev-parse --verify "refs\/tags\/\$\{TO\}\^\{commit\}"/),
+      indexOf(/pnpm install --frozen-lockfile/),
+      indexOf(/deploy-worker\.ts --env production --rollback-to "\$TO_SHA"$/m),
+      indexOf(/pnpm smoke --env production --expect-sha "\$TO_SHA"$/m),
+    ];
+    expect(order).toEqual(order.toSorted((a, b) => a - b));
+    expect(steps.filter((step) => /deploy-worker\.ts/.test(step.body))).toHaveLength(1);
+    expect(code(yaml)).not.toMatch(/pnpm build|--target|terraform|infra:sync|migrations|--env (?:dev|staging)\b/);
+  });
+
+  it("inputs.to は env で渡し、run に式を埋め込まない（シェルへの注入を作らない）", () => {
+    for (const step of steps) {
+      expect(runOf(step), step.body).not.toContain("${{");
+    }
+    const usages = code(yaml)
+      .split("\n")
+      .filter((line) => /\$\{\{\s*inputs\./.test(line));
+    expect(usages.length).toBeGreaterThan(0);
+    for (const line of usages) expect(line).toMatch(/^\s+TO: \$\{\{ inputs\.to \}\}$/);
+  });
+
+  it("TO_SHA は、切り替え先の commit を引いたステップ（id: to）の出力から渡す", () => {
+    const resolveStep = steps[indexOf(/git rev-parse --verify/)]?.body ?? "";
+    expect(resolveStep).toMatch(/^\s+id: to$/m);
+    expect(resolveStep).toContain('echo "sha=${sha}" >> "$GITHUB_OUTPUT"');
+    for (const step of steps.filter((s) => /"\$TO_SHA"/.test(s.body))) {
+      expect(step.body).toContain("TO_SHA: ${{ steps.to.outputs.sha }}");
+    }
+  });
+
+  it("切り替え先の commit を引くスクリプトは、注釈付きタグが指す commit を出力に書く。無いタグなら落とす", () => {
+    const repo = mkdtempSync(join(tmpdir(), "rollback-yml-test-"));
+    try {
+      const gitEnv = { PATH: process.env["PATH"], HOME: repo, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(repo, "gitconfig") };
+      const git = (cwd: string, ...args: string[]): string => {
+        const result = spawnSync("git", ["-c", "user.name=fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", ...args], { cwd, env: gitEnv, encoding: "utf8" });
+        expect(result.status, result.stderr).toBe(0);
+        return result.stdout.trim();
+      };
+      const origin = join(repo, "origin");
+      const clone = join(repo, "clone");
+      for (const path of [origin, clone]) mkdirSync(path);
+      git(origin, "init", "-q");
+      git(origin, "commit", "-q", "--allow-empty", "-m", "release");
+      git(origin, "tag", "-a", "v9.9.9", "-m", "fixture release");
+      git(origin, "commit", "-q", "--allow-empty", "-m", "later");
+      const tagged = git(origin, "rev-parse", "v9.9.9^{commit}");
+      git(clone, "init", "-q");
+      git(clone, "remote", "add", "origin", `file://${origin}`);
+
+      const script = runScript(steps[indexOf(/git rev-parse --verify/)] ?? { body: "" });
+      const output = join(repo, "github-output");
+      const resolveTag = (to: string) =>
+        spawnSync("bash", ["--noprofile", "--norc", "-eo", "pipefail", "-c", script], { cwd: clone, env: { ...gitEnv, TO: to, GITHUB_OUTPUT: output }, encoding: "utf8" });
+
+      const ok = resolveTag("v9.9.9");
+      expect(ok.status, ok.stderr).toBe(0);
+      expect(readFileSync(output, "utf8")).toBe(`sha=${tagged}\n`);
+      expect(ok.stdout).toContain(`切り替え先: v9.9.9 = ${tagged}`);
+
+      const missing = resolveTag("v9.9.8");
+      expect(missing.status).toBe(1);
+      expect(missing.stdout).toContain("::error::タグ v9.9.8 を取れない");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("wrangler を直接呼ばない。smoke に --base-url を渡さない。Worker に secret を載せない", () => {
+    for (const step of steps) {
+      expect(step.body).not.toMatch(/(?:^|\s)wrangler\s/m);
+      expect(step.body).not.toContain("--base-url");
+      expect(step.body).not.toContain("--secrets-file");
+      expect(runOf(step)).not.toMatch(/\$\{?(?:MUSUBI_PROBE_TOKEN|SMOKE_PROBE_TOKEN|CLOUDFLARE_API_TOKEN)\b/);
+    }
+  });
+
+  it("Cloudflare のトークンと Account ID は production 環境の *_PROD を、切り替えのステップにだけ渡す", () => {
+    for (const step of steps) {
+      const switches = /deploy-worker\.ts/.test(step.body);
+      expect(passesAs(step, "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_API_TOKEN_PROD"), step.body).toBe(switches);
+      expect(passesAs(step, "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_ACCOUNT_ID_PROD"), step.body).toBe(switches);
+      expect(passes(step, "CLOUDFLARE_API_TOKEN"), step.body).toBe(false);
+      expect(passes(step, "CLOUDFLARE_ACCOUNT_ID"), step.body).toBe(false);
+    }
+  });
+
+  it("MUSUBI_PROBE_TOKEN は smoke に SMOKE_PROBE_TOKEN としてだけ渡す（Worker に載せない）。SMOKE_BASE_URL も smoke だけ", () => {
+    for (const step of steps) {
+      const smoke = /pnpm smoke/.test(step.body);
+      expect(passes(step, "MUSUBI_PROBE_TOKEN"), step.body).toBe(smoke);
+      expect(passesAs(step, "SMOKE_PROBE_TOKEN", "MUSUBI_PROBE_TOKEN"), step.body).toBe(smoke);
+      expect(passesAs(step, "MUSUBI_PROBE_TOKEN", "MUSUBI_PROBE_TOKEN"), step.body).toBe(false);
+      expect(passes(step, "SMOKE_BASE_URL"), step.body).toBe(smoke);
+    }
+  });
+
+  it("R2 の資格情報・TF_* は使わない。Secret はステップの env にだけ置き、vars を使わない", () => {
+    expect(code(yaml)).not.toMatch(/R2_|TF_CLOUDFLARE|AWS_/);
+    const beforeSteps = code(yaml).split(/^ {4}steps:$/m)[0] ?? "";
+    expect(beforeSteps).not.toContain("secrets");
+    expect(code(yaml)).not.toMatch(/\bvars\./);
+    expect(code(yaml)).not.toMatch(/secrets\[|toJSON\(\s*secrets/);
+  });
+
+  it("前提の確認は、渡している Secret を全部、値ではなく空かどうかだけで見る", () => {
+    const passed = new Set([...code(yaml).matchAll(/\$\{\{\s*secrets\.([A-Z0-9_]+)\s*\}\}/g)].map((m) => m[1]));
+    const preflight = steps[0]?.body ?? "";
+    for (const secret of passed) {
+      expect(preflight).toContain(`HAS_${secret}: \${{ secrets.${secret} != '' }}`);
+    }
+    expect(passes({ body: preflight }, "[A-Z0-9_]+")).toBe(false);
+  });
 });
