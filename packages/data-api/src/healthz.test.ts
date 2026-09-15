@@ -51,10 +51,10 @@ describe("runHealthz", () => {
 
   it("例外の文言は応答に載せない（gateway → host を経て外へ出る）。ログにだけ出す", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const leaked = new Error("bucket musubi-staging-bundles: internal detail");
+    const leaked = new Error("bucket musunest-staging-bundles: internal detail");
     const { body } = await runHealthz(probes({ r2: fails(leaked) }), META);
 
-    expect(JSON.stringify(body)).not.toContain("musubi-staging-bundles");
+    expect(JSON.stringify(body)).not.toContain("musunest-staging-bundles");
     expect(body.checks.r2).toBe("ng: Error");
     expect(error).toHaveBeenCalledWith("[data-api] healthz: r2 ng", leaked);
   });

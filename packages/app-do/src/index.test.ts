@@ -33,7 +33,7 @@ const BOOT_TIMEOUT_MS = 120_000;
 
 describe("app-do パッケージ", () => {
   it("パッケージ名が正本の名前と一致する", () => {
-    expect(PACKAGE_NAME).toBe("@musubi/app-do");
+    expect(PACKAGE_NAME).toBe("@musunest/app-do");
   });
 });
 

@@ -21,16 +21,16 @@
             "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
           },
           {
-            "group": ["@musubi/app-do", "@musubi/app-do/**"],
+            "group": ["@musunest/app-do", "@musunest/app-do/**"],
             "message": "host は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。gateway を Service Binding（GATEWAY）で呼ぶ"
           },
           {
-            "group": ["@musubi/data-api", "@musubi/data-api/**", "**/packages/**"],
+            "group": ["@musunest/data-api", "@musunest/data-api/**", "**/packages/**"],
             "message": "host は data-api 以下を直接参照しない（01 §3.2）。gateway を Service Binding（GATEWAY）で呼ぶ"
           },
           {
-            "group": ["@musubi/gateway", "@musubi/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
-            "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musubi/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
+            "group": ["@musunest/gateway", "@musunest/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
+            "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musunest/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
           },
           {
             "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],
@@ -84,16 +84,16 @@
                 "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
               },
               {
-                "group": ["@musubi/app-do", "@musubi/app-do/**"],
+                "group": ["@musunest/app-do", "@musunest/app-do/**"],
                 "message": "host は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。gateway を Service Binding（GATEWAY）で呼ぶ"
               },
               {
-                "group": ["@musubi/data-api", "@musubi/data-api/**", "**/packages/**"],
+                "group": ["@musunest/data-api", "@musunest/data-api/**", "**/packages/**"],
                 "message": "host は data-api 以下を直接参照しない（01 §3.2）。gateway を Service Binding（GATEWAY）で呼ぶ"
               },
               {
-                "group": ["@musubi/gateway", "@musubi/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
-                "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musubi/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
+                "group": ["@musunest/gateway", "@musunest/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
+                "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musunest/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
               },
               {
                 "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],
@@ -131,16 +131,16 @@
                 "message": "cloudflare:workers の直接importは app-do のみ。他は adapter 層に閉じ込める（CLAUDE.md 不変条件）"
               },
               {
-                "group": ["@musubi/app-do", "@musubi/app-do/**"],
+                "group": ["@musunest/app-do", "@musunest/app-do/**"],
                 "message": "host は DO を直接触らない。DO に触れてよいのは data-api だけ（03 §4）。gateway を Service Binding（GATEWAY）で呼ぶ"
               },
               {
-                "group": ["@musubi/data-api", "@musubi/data-api/**", "**/packages/**"],
+                "group": ["@musunest/data-api", "@musunest/data-api/**", "**/packages/**"],
                 "message": "host は data-api 以下を直接参照しない（01 §3.2）。gateway を Service Binding（GATEWAY）で呼ぶ"
               },
               {
-                "group": ["@musubi/gateway", "@musubi/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
-                "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musubi/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
+                "group": ["@musunest/gateway", "@musunest/gateway/**", "**/apps/gateway/**", "**/gateway/src/**"],
+                "message": "gateway を import しない（dep-graph.mjs で host が持てる依存は @musunest/sdk だけ）。gateway は Service Binding（GATEWAY）で呼ぶ"
               },
               {
                 "group": ["@aws-sdk/client-s3", "@aws-sdk/client-s3/**", "aws4fetch"],

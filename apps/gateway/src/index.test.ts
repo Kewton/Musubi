@@ -6,7 +6,7 @@
 //      Service Binding 越しに data-api の /healthz に届き、D1 / R2 / DO の結果まで返ることを確かめる
 //   3. 別の env を名乗る data-api に届いたら data_api を ng にする。つまり 2 の d1 / r2 / do の ok は、
 //      gateway 自身ではなく Service Binding の先の応答から来ている
-//   4. production の設定では、/healthz の詳細を X-Musubi-Probe が secret と一致したときだけ返す（Issue #55）。
+//   4. production の設定では、/healthz の詳細を X-Musunest-Probe が secret と一致したときだけ返す（Issue #55）。
 //      ヘッダ無し・誤った値・正しい値の3通りと、secret を置いていない production（常に隠す）を workerd 上で確かめる
 //
 // モックにしないのは data-api と同じ理由：Service Binding が「結線されている」ことの証明は、
@@ -48,7 +48,7 @@ const readConfig = (path: URL, env: string) =>
 
 describe("gateway パッケージ", () => {
   it("パッケージ名が正本の名前と一致する", () => {
-    expect(PACKAGE_NAME).toBe("@musubi/gateway");
+    expect(PACKAGE_NAME).toBe("@musunest/gateway");
   });
 });
 
@@ -56,12 +56,12 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
   const config = readConfig(CONFIG_PATH, env);
   const dataApi = readConfig(DATA_API_CONFIG_PATH, env);
 
-  it("Worker 名が musubi-<env>-gateway", () => {
-    expect(config.name).toBe(`musubi-${env}-gateway`);
+  it("Worker 名が musunest-<env>-gateway", () => {
+    expect(config.name).toBe(`musunest-${env}-gateway`);
   });
 
   it("Service Binding は DATA_API の1本だけで、同じ env の data-api を指す", () => {
-    expect(dataApi.name).toBe(`musubi-${env}-data-api`);
+    expect(dataApi.name).toBe(`musunest-${env}-data-api`);
     expect(config.services).toEqual([{ binding: DATA_API_BINDING, service: dataApi.name }]);
   });
 
@@ -88,13 +88,13 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
     expect(config.vars).toMatchObject({ HEALTHZ_DETAIL: DETAIL[env] });
   });
 
-  it("MUSUBI_PROBE_TOKEN を vars に書かない（wrangler secret。リポジトリに値を置かない）", () => {
+  it("MUSUNEST_PROBE_TOKEN を vars に書かない（wrangler secret。リポジトリに値を置かない）", () => {
     expect(Object.keys(config.vars)).not.toContain(PROBE_TOKEN_SECRET);
   });
 });
 
 describe.each(ENVS)("gateway → data-api（env.%s・workerd 上の実機）", (env) => {
-  // production は詳細を X-Musubi-Probe 付きのときだけ返す。dev / staging は secret もヘッダも無しで今の応答を返す
+  // production は詳細を X-Musunest-Probe 付きのときだけ返す。dev / staging は secret もヘッダも無しで今の応答を返す
   const probe = DETAIL[env] === "probe";
   const server = createTestHarness({
     workers: [
@@ -189,7 +189,7 @@ async function expectHidden(res: HarnessResponse, status: 200 | 503): Promise<vo
   }
 }
 
-describe("production の /healthz は X-Musubi-Probe が正しいときだけ詳細を返す（workerd 上の実機・Issue #55 の受入試験）", () => {
+describe("production の /healthz は X-Musunest-Probe が正しいときだけ詳細を返す（workerd 上の実機・Issue #55 の受入試験）", () => {
   // production の設定（HEALTHZ_DETAIL=probe）そのままに、secret だけテスト用の値を渡す。
   // data-api の ENVIRONMENT を staging にした 503 の組も並べ、隠した応答が ng の文言も漏らさないことを見る。
   const ok = createTestHarness({

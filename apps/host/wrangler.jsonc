@@ -19,23 +19,23 @@
   //   turbo も host の build に CLOUDFLARE_ENV を渡し、キャッシュの鍵に入れる（apps/host/turbo.json）。だから、リポジトリ直下の
   //   `CLOUDFLARE_ENV=<env> pnpm build` でよい。ルートの deploy:staging / deploy:production と CD（deploy-staging.yml・deploy-production.yml。
   //   04 §4・§5）も、配る env と同じ CLOUDFLARE_ENV を付けてビルドする。
-  //   ⚠️ ビルドの出力のディレクトリ名は env によらず dist/musubi_dev_host（トップレベルの name から作られる）。
+  //   ⚠️ ビルドの出力のディレクトリ名は env によらず dist/musunest_dev_host（トップレベルの name から作られる）。
   //     どの env でビルドしたかは、その中の wrangler.json の targetEnvironment を見る。
   //
   // ── /healthz の詳細を誰に返すか（03 §5「セキュリティ上の注意」。gateway と同じ形）──────────
-  //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musubi-Probe ヘッダが
-  //                         secret MUSUBI_PROBE_TOKEN と一致したときだけ返し、それ以外は {"ok": true|false} だけにする。
+  //   vars.HEALTHZ_DETAIL … "public"（dev / staging）は誰にでも詳細を返す。"probe"（production）は X-Musunest-Probe ヘッダが
+  //                         secret MUSUNEST_PROBE_TOKEN と一致したときだけ返し、それ以外は {"ok": true|false} だけにする。
   //                         未設定・書き違いは probe として扱う（閉じる側に倒す）
-  //   MUSUBI_PROBE_TOKEN  … **Worker の secret。ここ（vars）に書かない。** 値の正本は GitHub の production 環境の Secret MUSUBI_PROBE_TOKEN で、
+  //   MUSUNEST_PROBE_TOKEN  … **Worker の secret。ここ（vars）に書かない。** 値の正本は GitHub の production 環境の Secret MUSUNEST_PROBE_TOKEN で、
   //                         CD（deploy-production.yml。04 §5）が deploy のたびに `wrangler deploy --secrets-file` で gateway と host に同じ値を載せる
   //                         （infra/scripts/deploy-worker.ts。値が無ければ配らない）。**手で wrangler secret put をしない**（次の deploy で上書きされる）。
-  //                         host は gateway を呼ぶときこの値を X-Musubi-Probe に載せ、gateway の詳細を受け取る。
+  //                         host は gateway を呼ぶときこの値を X-Musunest-Probe に載せ、gateway の詳細を受け取る。
   //                         置いていない production は常に隠し、gateway の詳細も読めないので {"ok": false}（503）になる
   //   この値の env ごとの形と、secret が vars に無いことは src/worker/index.test.ts が確かめる。
   //
   // ⚠️ services / vars は env へ継承されない。だから3環境に丸ごと書く（gateway と同じ）。
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "musubi-dev-host",
+  "name": "musunest-dev-host",
   // ★SSR エントリ（@tanstack/react-start/server-entry）ではない。/api/* と /healthz だけを見る薄い Worker
   "main": "src/worker/index.ts",
 
@@ -57,20 +57,20 @@
 
   "env": {
     "dev": {
-      "name": "musubi-dev-host",
+      "name": "musunest-dev-host",
       "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local", "HEALTHZ_DETAIL": "public" },
       // service は gateway の wrangler.jsonc の env.<env>.name。**同じ env の gateway に結ぶ**
-      "services": [{ "binding": "GATEWAY", "service": "musubi-dev-gateway" }]
+      "services": [{ "binding": "GATEWAY", "service": "musunest-dev-gateway" }]
     },
     "staging": {
-      "name": "musubi-staging-host",
+      "name": "musunest-staging-host",
       "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local", "HEALTHZ_DETAIL": "public" },
-      "services": [{ "binding": "GATEWAY", "service": "musubi-staging-gateway" }]
+      "services": [{ "binding": "GATEWAY", "service": "musunest-staging-gateway" }]
     },
     "production": {
-      "name": "musubi-production-host",
+      "name": "musunest-production-host",
       "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local", "HEALTHZ_DETAIL": "probe" },
-      "services": [{ "binding": "GATEWAY", "service": "musubi-production-gateway" }]
+      "services": [{ "binding": "GATEWAY", "service": "musunest-production-gateway" }]
     }
   }
 }

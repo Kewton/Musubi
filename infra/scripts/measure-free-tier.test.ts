@@ -72,7 +72,7 @@ const ACCOUNT_ID = "0123456789abcdef0123456789abcdef";
 const PROD_ACCOUNT_ID = "fedcba9876543210fedcba9876543210";
 const TOKEN = "test-token_ABCdef0123456789";
 const SUBDOMAIN = "fake-sub-7f3a";
-const HOSTNAME = `musubi-staging-host.${SUBDOMAIN}.workers.dev`;
+const HOSTNAME = `musunest-staging-host.${SUBDOMAIN}.workers.dev`;
 
 /**
  * 2026-09-14 に staging で記録した応答（1回目の実測：/ と深いリンク 計 20 回・/healthz 20 回）。値はそのまま。
@@ -85,21 +85,21 @@ const RECORDED = {
   healthzInvocations: [
     {
       avg: { sampleInterval: 1.5 },
-      dimensions: { scriptName: "musubi-staging-host" },
+      dimensions: { scriptName: "musunest-staging-host" },
       max: { cpuTime: 1564 },
       quantiles: { cpuTimeP50: 595, cpuTimeP99: 1564 },
       sum: { cpuTimeUs: 18224, errors: 0, requests: 27 },
     },
     {
       avg: { sampleInterval: 1 },
-      dimensions: { scriptName: "musubi-staging-gateway" },
+      dimensions: { scriptName: "musunest-staging-gateway" },
       max: { cpuTime: 1179 },
       quantiles: { cpuTimeP50: 611, cpuTimeP99: 1179 },
       sum: { cpuTimeUs: 12663, errors: 0, requests: 20 },
     },
     {
       avg: { sampleInterval: 1 },
-      dimensions: { scriptName: "musubi-staging-data-api" },
+      dimensions: { scriptName: "musunest-staging-data-api" },
       max: { cpuTime: 3770 },
       quantiles: { cpuTimeP50: 2276, cpuTimeP99: 3770 },
       sum: { cpuTimeUs: 47783, errors: 0, requests: 20 },
@@ -223,7 +223,7 @@ describe("契約：宛先の Worker と経路", () => {
     };
     expect(analyticsVariables(ACCOUNT_ID, HOSTNAME, record)).toEqual({
       accountTag: ACCOUNT_ID,
-      scripts: ["musubi-staging-host", "musubi-staging-gateway", "musubi-staging-data-api", UNKNOWN_SCRIPT],
+      scripts: ["musunest-staging-host", "musunest-staging-gateway", "musunest-staging-data-api", UNKNOWN_SCRIPT],
       hostname: HOSTNAME,
       pagesSince: "2026-09-14T09:00:00Z",
       pagesUntil: "2026-09-14T09:00:10Z",
@@ -288,7 +288,7 @@ describe("parseAnalytics：GraphQL の応答を窓ごとの行にする", () => 
     const snapshot = parseAnalytics(recordedBody(), []);
     expect(snapshot.pages).toEqual({ invocations: [], assets: 22 });
     expect(snapshot.healthz.invocations[0]).toEqual({
-      scriptName: "musubi-staging-host",
+      scriptName: "musunest-staging-host",
       requests: 27,
       errors: 0,
       cpuTimeUs: 18224,

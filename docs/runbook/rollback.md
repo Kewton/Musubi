@@ -23,6 +23,10 @@
 | migration の中身・D1 のデータが悪い | **巻き戻さない**。前へ直す／最後の手段は Time Travel | §2 |
 | Terraform の apply で環境を壊した | state を退避物から戻し、設定は前へ直して apply し直す | §3 |
 
+> **改名の境界（2026-09-15・#75）**：プロダクト名の変更で、Worker 名が `musubi-<env>-<用途>` から `musunest-<env>-<用途>` に変わった。
+> **改名より前の版（`v0.1.x`）へは戻せない。** `wrangler rollback` は同じ名前の Worker の版しか選べず、古いタグを配り直しても
+> 旧名の Worker が作られるだけで、消えた D1・R2 を指す。巻き戻し先に選べるのは、改名後の最初のタグ（`v0.2.0`）以降である。
+
 ---
 
 ## 1. コード
@@ -73,11 +77,11 @@ gh run watch <run の ID>
 
 ```
 deploy-worker: rollback（env=production）: 3つの Worker を GIT_SHA が <commit> の版へ切り替える。build も D1 マイグレーションもしない
-  data-api（musubi-production-data-api）: 今 <版>（GIT_SHA <先頭12桁>・<作成時刻>）。読んだ版 <n>
+  data-api（musunest-production-data-api）: 今 <版>（GIT_SHA <先頭12桁>・<作成時刻>）。読んだ版 <n>
   …
   host: <今の版> → <戻し先の版>
 deploy-worker: 古い版へ戻す。順は host → gateway → data-api
-deploy-worker: host: wrangler rollback <版> --name musubi-production-host --message deploy-worker --rollback-to <commit> --yes
+deploy-worker: host: wrangler rollback <版> --name musunest-production-host --message deploy-worker --rollback-to <commit> --yes
   …
 deploy-worker: host: 今のデプロイが <版> を 100% で向いていることを確かめた
 …
@@ -109,7 +113,7 @@ gh workflow run rollback.yml --ref <最新の v タグ> -f to=<最新の v タ�
 | `rollback.yml` を含まないタグしか無い（**v0.1.0** がそう） | そのタグを `--ref` にできない（ワークフローの定義が無い） | 新しいタグを `--ref` にする。戻し先（`to`）は古いタグでよい |
 | 戻し先の版から今までに **Durable Object のクラスを足した・消した** | Cloudflare が rollback を拒否する（Cloudflare の Rollbacks の文書） | 戻せない前提でリリースする。前へ直す（新しいタグ）。二次手段も古い設定にクラスを消す migration が無く通らない見込み（未確認） |
 | 版が束縛している **R2 バケット・KV・Queue が消えている** | 同上（拒否） | 前へ直す。Terraform の資源を消すのは、それを使う版が直近に無くなってから |
-| 戻し先の版から今までに **合言葉（`MUSUBI_PROBE_TOKEN`）を変えた** | wrangler は「secret が変わった」確認を非対話で yes にして進む（wrangler 4.131.1 のソース。ログに変わった secret の**名前**が出る）。戻した版がどちらの値で動くかは Cloudflare の文書に書かれておらず**未確認**。古い値で動くと ② が「詳細が隠された応答」で落ちる | ② が落ちたら §1.4（今の合言葉を載せて配り直す） |
+| 戻し先の版から今までに **合言葉（`MUSUNEST_PROBE_TOKEN`）を変えた** | wrangler は「secret が変わった」確認を非対話で yes にして進む（wrangler 4.131.1 のソース。ログに変わった secret の**名前**が出る）。戻した版がどちらの値で動くかは Cloudflare の文書に書かれておらず**未確認**。古い値で動くと ② が「詳細が隠された応答」で落ちる | ② が落ちたら §1.4（今の合言葉を載せて配り直す） |
 | 今のデプロイが1つの版に 100% を向けていない（段階的デプロイ） | ① が切り替えずに落ちる | このリポジトリは段階的デプロイを使わない。手で作ったならダッシュボードで 100% に戻してから |
 | Worker ごとに向きが混ざる（例：data-api は戻し、host は進める） | ① が切り替えずに落ちる | 途中で落ちた配備と切り替えが重なると起きうる。どちらの順でも途中の組み合わせを保証できないので、§1.4 で配り直して揃える |
 
@@ -123,7 +127,7 @@ gh workflow run deploy-production.yml --ref <戻し先の v タグ>
 - **戻し先のタグにある `deploy-production.yml` の定義で動く。** `deploy-production.yml` を含むタグ（v0.1.0 以降）だけが使える
 - ⓪：戻し先のタグの `wrangler.jsonc` を今の state と照合する。その後に Terraform の資源を変えていれば**ここで止まる**（正しい）。そのときは前へ直す
 - ①：戻し先のタグの migration はすべて当たっているので、何も当たらない（`No migrations to apply!`）。**D1 は戻らない**（§2）
-- ②：戻し先のコードを**ビルドし直して新しい版を作る**。合言葉は今の `MUSUBI_PROBE_TOKEN` が載る
+- ②：戻し先のコードを**ビルドし直して新しい版を作る**。合言葉は今の `MUSUNEST_PROBE_TOKEN` が載る
 - 所要は通常のデプロイと同じ（2026-09-14 の v0.1.0 の run は 3分10秒）
 - 回し直した後に、一次手段で新しいタグの版へ進めてよい（向きは commit が最初に配られた時刻で決まるので、版の新旧が逆転していても正しい順になる）
 
@@ -141,7 +145,7 @@ CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN_PROD" CLOUDFLARE_ACCOUNT_ID="$CLOUDF
   pnpm exec tsx infra/scripts/deploy-worker.ts --env production --rollback-to "$TO_SHA"
 
 # 宛先は production の host の workers.dev のオリジン（手元では --base-url でよい。ログを公開しないので）
-SMOKE_PROBE_TOKEN="$MUSUBI_PROBE_TOKEN_PROD" pnpm smoke --env production --expect-sha "$TO_SHA" --base-url <production の host のオリジン>
+SMOKE_PROBE_TOKEN="$MUSUNEST_PROBE_TOKEN_PROD" pnpm smoke --env production --expect-sha "$TO_SHA" --base-url <production の host のオリジン>
 ```
 
 - 資格情報は**環境変数で明示して渡す。** deploy-worker は wrangler を空の一時ディレクトリで動かすので、`.env` を wrangler に黙って読ませない

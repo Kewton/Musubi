@@ -85,7 +85,7 @@ export const WORKERS = ["host", "gateway", "data-api"] as const;
 export type Worker = (typeof WORKERS)[number];
 
 /** Worker 名。正本は各 wrangler.jsonc の env.staging.name（食い違えば measure-free-tier.test.ts が落とす）。 */
-export const scriptName = (worker: Worker): string => `musubi-${TARGET_ENV}-${worker}`;
+export const scriptName = (worker: Worker): string => `musunest-${TARGET_ENV}-${worker}`;
 
 /** Analytics が Worker の名前を決められないときの値。 */
 export const UNKNOWN_SCRIPT = "__unknown__";

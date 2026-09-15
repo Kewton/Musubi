@@ -36,14 +36,14 @@ pnpm install
 pnpm build
 ```
 
-- gateway は `@musubi/data-api` の、data-api は `@musubi/app-do` の `dist/` を import する。ビルドしないと起動しない
+- gateway は `@musunest/data-api` の、data-api は `@musunest/app-do` の `dist/` を import する。ビルドしないと起動しない
 - host は `vite build` の出力（`apps/host/dist/`）を並べる。host は**ビルドの時点で** `CLOUDFLARE_ENV` によって env が決まり、未指定なら env.dev（`apps/host/wrangler.jsonc` 冒頭）。
   turbo はこの値を host の build へ渡すので（`apps/host/turbo.json`）、**`CLOUDFLARE_ENV` を付けずに**打つ。シェルに `CLOUDFLARE_ENV=staging` などが残っていると staging のビルドになる
 - staging / production 向けにビルドした後でも、`CLOUDFLARE_ENV` 無しで `pnpm build` をやり直せば env.dev の出力に戻る（キャッシュの鍵に env が入るので、別のキャッシュが当たるか作り直す）。
-  出力のディレクトリ名は env によらず `musubi_dev_host` なので、名前では見分けられない。中身の env はこれで確かめる（`dev` と出る）
+  出力のディレクトリ名は env によらず `musunest_dev_host` なので、名前では見分けられない。中身の env はこれで確かめる（`dev` と出る）
 
   ```bash
-  node -p 'require("./apps/host/dist/musubi_dev_host/wrangler.json").targetEnvironment'
+  node -p 'require("./apps/host/dist/musunest_dev_host/wrangler.json").targetEnvironment'
   ```
 
 ### 1.3 D1 にマイグレーションを当てる
@@ -58,7 +58,7 @@ pnpm exec wrangler d1 migrations apply CONTROL_DB --env dev --config packages/da
 
 ```bash
 pnpm exec wrangler dev --local --env dev \
-  -c apps/host/dist/musubi_dev_host/wrangler.json \
+  -c apps/host/dist/musunest_dev_host/wrangler.json \
   -c apps/gateway/wrangler.jsonc \
   -c packages/data-api/wrangler.jsonc \
   --persist-to packages/data-api/.wrangler/state
@@ -71,12 +71,12 @@ pnpm exec wrangler dev --local --env dev \
 | `--local` | remote binding を無効にする（§3） |
 | `--env dev` | gateway と data-api の binding（services・D1・R2・DO）は env.dev にしか書いていない。env へ継承されない欄だから |
 | host を**先頭**に置く | 先頭の Worker が 8787 で受ける。gateway と data-api にはそこから Service Binding で届く |
-| host は**ビルドの出力**（`apps/host/dist/musubi_dev_host/wrangler.json`）を指す | `apps/host/wrangler.jsonc` を指すと起動しない（§1.6） |
-| `--persist-to packages/data-api/.wrangler/state` | 省くと先頭の設定の隣（`apps/host/dist/musubi_dev_host/.wrangler/state`）に作られる。§1.3 と別の、マイグレーションの当たっていない D1 になり、ビルドのたびに消える |
+| host は**ビルドの出力**（`apps/host/dist/musunest_dev_host/wrangler.json`）を指す | `apps/host/wrangler.jsonc` を指すと起動しない（§1.6） |
+| `--persist-to packages/data-api/.wrangler/state` | 省くと先頭の設定の隣（`apps/host/dist/musunest_dev_host/.wrangler/state`）に作られる。§1.3 と別の、マイグレーションの当たっていない D1 になり、ビルドのたびに消える |
 
 起動時に出る次の2つは想定どおりで、無視してよい。
 
-- host の設定に environment `dev` が無いという WARNING（Worker 名が `musubi-dev-host-dev` と表示される）。ビルドの出力は env を解決済みで、env のブロックを持たない
+- host の設定に environment `dev` が無いという WARNING（Worker 名が `musunest-dev-host-dev` と表示される）。ビルドの出力は env を解決済みで、env のブロックを持たない
 - binding の表の `[not connected]`。同じプロセスで起動する Worker とは起動後につながる（§1.5 ① の `"gateway":"ok"` で確かめる）
 
 **`Ready on` のポートが 8787 であることを見る。** 8787 が使われていると、wrangler は黙って別のポート（8788 など）で起動する（2026-09-14 実測）。
@@ -162,7 +162,7 @@ rm -rf packages/data-api/.wrangler/state
 
 | 穴 | ローカルで何が起きるか | M0 での扱い | 代わりに何で確かめるか |
 |---|---|---|---|
-| **WfP dispatch** | wrangler 4.131.1 は dispatch namespace の binding を `not supported` と表示し、呼ぶと `Binding DISPATCHER needs to be run remotely` で失敗する（2026-09-14 実測。一時的な設定で試した）。つなぐには remote binding が要り、§3 に反する | **使わない。** `wfp_enabled` を validation で `false` に固定してあり（`infra/terraform/modules/musubi-env/variables.tf`）、どの wrangler.jsonc にも `dispatch_namespaces` が無い。Free 前提（CLAUDE.md） | 解禁（`06` §5 の W-1 / W-2。M5〜M6）の後に **staging** で確かめる（`03` §6） |
+| **WfP dispatch** | wrangler 4.131.1 は dispatch namespace の binding を `not supported` と表示し、呼ぶと `Binding DISPATCHER needs to be run remotely` で失敗する（2026-09-14 実測。一時的な設定で試した）。つなぐには remote binding が要り、§3 に反する | **使わない。** `wfp_enabled` を validation で `false` に固定してあり（`infra/terraform/modules/musunest-env/variables.tf`）、どの wrangler.jsonc にも `dispatch_namespaces` が無い。Free 前提（CLAUDE.md） | 解禁（`06` §5 の W-1 / W-2。M5〜M6）の後に **staging** で確かめる（`03` §6） |
 | **Google OAuth** | Google のサーバーとの往復（認可画面・コールバック）が要り、手元の workerd の中では閉じない | **対象が無い。** 認証は M2 で入る（gateway の中身は M2。`03` §1）。**ログインは当面 Google OAuth のみ**で、LINE Login は軌道に乗り要望が出てから（2026-09-15 決定） | M2 で、dev 用の OAuth クライアント（`00-human-tasks.md` H-11・#23）で実物と往復する。それ以外は mock（`03` §6） |
 | **外部送信** | 送った結果は外部サービスに届いて初めて分かる。手元から送れば実物に届き、取り消せない | **対象が無い。** 外へ送るコードは M0 に無い（`packages/connector` は空） | 送る処理を足すときは、宛先に届かない **dry-run** を一級市民として先に用意し、ローカルと自動テストはそれで動かす（`03` §6）。dry-run のインターフェースはまだ無い（この runbook の対象外） |
 
@@ -178,11 +178,11 @@ rm -rf packages/data-api/.wrangler/state
 |---|---|
 | §1.1 `pnpm install` | exit 0 |
 | §1.2 `pnpm build` | exit 0 |
-| §1.3 マイグレーション | `0001_musubi_meta.sql` が ✅。2回目は `No migrations to apply!` |
+| §1.3 マイグレーション | `0001_musunest_meta.sql` が ✅。2回目は `No migrations to apply!` |
 | §1.4 起動 | `Ready on http://localhost:8787` |
 | §1.5 ① `/healthz` | `200` と下の JSON |
 | §1.5 ② `/` | `200 text/html; charset=utf-8`。本文は `apps/host/dist/client/index.html` と一致 |
-| §1.5 ③ D1 | `CONTROL_DB [ '0001_musubi_meta.sql' ]`（exit 0）。§1.4 から `--persist-to` の行を外して起動し直すと、① と ② は同じまま ③ が `no such table: d1_migrations` で exit 1。戻すと exit 0 |
+| §1.5 ③ D1 | `CONTROL_DB [ '0001_musunest_meta.sql' ]`（exit 0）。§1.4 から `--persist-to` の行を外して起動し直すと、① と ② は同じまま ③ が `no such table: d1_migrations` で exit 1。戻すと exit 0 |
 
 ```json
 {"service":"host","env":"dev","version":"local","checks":{"gateway":"ok","data_api":"ok","d1":"ok","r2":"ok","do":"ok"},"elapsed_ms":16}

@@ -1,5 +1,18 @@
 # M0：開発基盤 — 作業手順書
 
+> **2026-09-15 にプロダクト名を MUSUNEST へ変更した（#75・所有者の決定）。** このディレクトリ（`workspace/mvp/m0/`）は M0 の記録なので、
+> **当時の名前のまま残し、書き換えていない。** 読むときは次の対応で読み替える。
+>
+> | 旧名（この記録） | 新名（今のコード・資源） |
+> |---|---|
+> | リポジトリ `Kewton/Musubi` ／ `Kewton/Musubi-workspace` | `Kewton/Musunest` ／ `Kewton/Musunest-workspace` |
+> | パッケージ `@musubi/*` | `@musunest/*` |
+> | Worker・D1・R2・Queue・KV `musubi-<env>-<用途>` | `musunest-<env>-<用途>` |
+> | Terraform `name_prefix` の既定値 `musubi` ／ `modules/musubi-env` | `musunest` ／ `modules/musunest-env` |
+> | Secret `MUSUBI_PROBE_TOKEN` ／ ヘッダ `X-Musubi-Probe` | `MUSUNEST_PROBE_TOKEN` ／ `X-Musunest-Probe` |
+> | D1 の表 `_musubi_meta` | `_musunest_meta` |
+> | **変えていないもの** | tfstate のバケット `musubi-tfstate`、Cloudflare の API トークンの名前、`.commandmate/profiles/musubi.json` |
+
 > 出典：企画書 v3.1 11章（技術基盤）／21章（開発体制）／22章（ロードマップ M0）。企画書は**非公開リポジトリ** `Kewton/Musubi-workspace` の `proposal/` にある
 > 対象リポジトリ：`github.com/Kewton/Musubi`（= 企画書21章の `musubi` monorepo）
 > 目安期間：**2週間（10営業日）**

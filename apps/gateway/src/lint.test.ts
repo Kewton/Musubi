@@ -23,7 +23,7 @@ const NO_RESTRICTED_TYPES = "typescript(no-restricted-types)";
 const VIOLATIONS: readonly (readonly [name: string, source: string, expected: readonly string[]])[] = [
   [
     "app-do を import する（05 §2 の受入で一時 PR に書く形）",
-    `import { AppInstanceDO } from "@musubi/app-do";\nexport const x = AppInstanceDO;\n`,
+    `import { AppInstanceDO } from "@musunest/app-do";\nexport const x = AppInstanceDO;\n`,
     [NO_RESTRICTED_IMPORTS],
   ],
   [
@@ -33,7 +33,7 @@ const VIOLATIONS: readonly (readonly [name: string, source: string, expected: re
   ],
   [
     "data-api の adapter をパッケージ越しに深く import する",
-    `import { cloudflareProbes } from "@musubi/data-api/src/cloudflare";\nexport const x = cloudflareProbes;\n`,
+    `import { cloudflareProbes } from "@musunest/data-api/src/cloudflare";\nexport const x = cloudflareProbes;\n`,
     [NO_RESTRICTED_IMPORTS],
   ],
   [
@@ -69,8 +69,8 @@ const VIOLATIONS: readonly (readonly [name: string, source: string, expected: re
 ];
 
 /** 対照。gateway が正当に書く形（data-api の契約と Service Binding）は通る。 */
-const ALLOWED = `import { HEALTHZ_PATH } from "@musubi/data-api";
-import type { HealthzBody } from "@musubi/data-api";
+const ALLOWED = `import { HEALTHZ_PATH } from "@musunest/data-api";
+import type { HealthzBody } from "@musunest/data-api";
 export interface Env {
   readonly DATA_API: Fetcher;
 }

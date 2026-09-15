@@ -8,9 +8,9 @@
 // gateway が 503（data_api などが ng）を返したときの gateway は ok で、ng はその先のキーに出る。
 // こうしておくと、host → gateway → data-api → {D1, R2, DO} のどこで切れたかが checks だけで読める（03 §5）。
 //
-// host はインターネットから届く。詳細を隠す env（production）では、X-Musubi-Probe が secret と一致しない限り
+// host はインターネットから届く。詳細を隠す env（production）では、X-Musunest-Probe が secret と一致しない限り
 // {"ok": true|false} だけを返す（disclose）。照合そのものは adapter の ProbeVerifier が行う。
-// gateway も同じ規則で隠すので、adapter は gateway を呼ぶときに secret を X-Musubi-Probe に載せる。
+// gateway も同じ規則で隠すので、adapter は gateway を呼ぶときに secret を X-Musunest-Probe に載せる。
 // それでも gateway が隠した応答を返したら（host と gateway の secret が揃っていない）、gateway を "ng: details hidden" にする。
 import { GATEWAY_CHECKS } from "./contract";
 import type {
@@ -26,7 +26,7 @@ import type {
 export type GatewayHealthz = () => Promise<Response>;
 
 /**
- * X-Musubi-Probe の値（無ければ null）が secret MUSUBI_PROBE_TOKEN と一致するか。
+ * X-Musunest-Probe の値（無ければ null）が secret MUSUNEST_PROBE_TOKEN と一致するか。
  * 時間一定の比較は Workers 固有の API を使うので adapter（src/worker/cloudflare.ts）が持つ。
  */
 export type ProbeVerifier = (presented: string | null) => Promise<boolean>;
@@ -83,7 +83,7 @@ export function readHealthzDetail(raw: string | undefined): HealthzDetail {
 /**
  * 応答に載せる本文を決める（03 §5「セキュリティ上の注意」。apps/gateway/src/healthz.ts と同じ）。
  * 詳細（service・env・version・checks・elapsed_ms）を返すのは、HEALTHZ_DETAIL が public のときと、
- * X-Musubi-Probe が secret と一致したときだけ。それ以外は ok だけにする。HTTP ステータスは変えない。
+ * X-Musunest-Probe が secret と一致したときだけ。それ以外は ok だけにする。HTTP ステータスは変えない。
  */
 export async function disclose(
   result: HealthzResult,
@@ -120,9 +120,9 @@ async function callGateway(gateway: GatewayHealthz, env: string): Promise<Upstre
     console.error("[host] healthz: gateway body is not JSON", e);
     return { ok: false, reason: "invalid body" };
   }
-  // gateway が詳細を隠した。host が載せた X-Musubi-Probe を gateway が受け付けていない（secret が無い・値が食い違う）。
+  // gateway が詳細を隠した。host が載せた X-Musunest-Probe を gateway が受け付けていない（secret が無い・値が食い違う）。
   if (isHiddenBody(raw)) {
-    console.error("[host] healthz: gateway hid the details (X-Musubi-Probe not accepted: MUSUBI_PROBE_TOKEN of host and gateway must be set and equal)");
+    console.error("[host] healthz: gateway hid the details (X-Musunest-Probe not accepted: MUSUNEST_PROBE_TOKEN of host and gateway must be set and equal)");
     return { ok: false, reason: "details hidden" };
   }
   const body = readGatewayBody(raw);

@@ -6,7 +6,7 @@
   // ── infra:sync の同期先である（正本：infra/scripts/sync-bindings.ts 冒頭）──────────
   //   - env.dev / env.staging / env.production の3ブロックを必ず置く。deploy は必ず --env を付ける
   //   - Terraform 由来の欄（database_id / database_name / bucket_name）は infra:sync が書き戻す。手で直さない
-  //     名前は "musubi-<env>-*" で決まるので最初から実名を書き、D1 の ID だけ仮の値にしてある
+  //     名前は "musunest-<env>-*" で決まるので最初から実名を書き、D1 の ID だけ仮の値にしてある
   //   - binding 名（CONTROL_DB / BUNDLES / UPLOADS）で要素を特定する。**改名すると同期されない**
   //   - kv_namespaces / queues.consumers を書かない。Account ID を書かない（public リポジトリ）
   //   - `--check` は binding の欠落を検出しない。欠落は infra/scripts/sync-bindings.test.ts が落とす
@@ -21,7 +21,7 @@
   //   だから3環境に丸ごと書く。トップレベルに置かないのは、置くと env 側との食い違いが生まれるだけで、
   //   --env を付けない配備はそもそも行わないため。
   "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "musubi-dev-data-api",
+  "name": "musunest-dev-data-api",
   "main": "src/index.ts",
 
   // 着手時（2026-09-13）に固定する。app-do と揃える（同梱 workerd 1.20260911.1 が受け付ける最大値）。
@@ -42,53 +42,53 @@
 
   "env": {
     "dev": {
-      "name": "musubi-dev-data-api",
+      "name": "musunest-dev-data-api",
       "vars": { "ENVIRONMENT": "dev", "GIT_SHA": "local" },
       "d1_databases": [
         {
           "binding": "CONTROL_DB",
-          "database_name": "musubi-dev-control",
-          "database_id": "abff398f-086b-4aa1-86c4-3ff571dd77a0",
+          "database_name": "musunest-dev-control",
+          "database_id": "b573e00e-98af-498a-873e-ad5373767179",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
       "r2_buckets": [
-        { "binding": "BUNDLES", "bucket_name": "musubi-dev-bundles" },
-        { "binding": "UPLOADS", "bucket_name": "musubi-dev-uploads" }
+        { "binding": "BUNDLES", "bucket_name": "musunest-dev-bundles" },
+        { "binding": "UPLOADS", "bucket_name": "musunest-dev-uploads" }
       ],
       "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
     },
     "staging": {
-      "name": "musubi-staging-data-api",
+      "name": "musunest-staging-data-api",
       "vars": { "ENVIRONMENT": "staging", "GIT_SHA": "local" },
       "d1_databases": [
         {
           "binding": "CONTROL_DB",
-          "database_name": "musubi-staging-control",
-          "database_id": "792a1ec4-1ce4-44a0-9876-fe73d9e113fe",
+          "database_name": "musunest-staging-control",
+          "database_id": "7056fdd8-a9c3-4613-bd71-d3080f9886a7",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
       "r2_buckets": [
-        { "binding": "BUNDLES", "bucket_name": "musubi-staging-bundles" },
-        { "binding": "UPLOADS", "bucket_name": "musubi-staging-uploads" }
+        { "binding": "BUNDLES", "bucket_name": "musunest-staging-bundles" },
+        { "binding": "UPLOADS", "bucket_name": "musunest-staging-uploads" }
       ],
       "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
     },
     "production": {
-      "name": "musubi-production-data-api",
+      "name": "musunest-production-data-api",
       "vars": { "ENVIRONMENT": "production", "GIT_SHA": "local" },
       "d1_databases": [
         {
           "binding": "CONTROL_DB",
-          "database_name": "musubi-production-control",
-          "database_id": "d399849e-6c20-4f23-98f0-88e05fc502af",
+          "database_name": "musunest-production-control",
+          "database_id": "f27e63ef-17e6-4bf4-931d-b8e902be5dca",
           "migrations_dir": "../control-plane/migrations"
         }
       ],
       "r2_buckets": [
-        { "binding": "BUNDLES", "bucket_name": "musubi-production-bundles" },
-        { "binding": "UPLOADS", "bucket_name": "musubi-production-uploads" }
+        { "binding": "BUNDLES", "bucket_name": "musunest-production-bundles" },
+        { "binding": "UPLOADS", "bucket_name": "musunest-production-uploads" }
       ],
       "durable_objects": { "bindings": [{ "name": "APP_DO", "class_name": "AppInstanceDO" }] }
     }

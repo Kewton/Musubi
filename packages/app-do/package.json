@@ -1,5 +1,5 @@
 {
-  "name": "@musubi/app-do",
+  "name": "@musunest/app-do",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -19,6 +19,6 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@musubi/appspec-schema": "workspace:*"
+    "@musunest/appspec-schema": "workspace:*"
   }
 }

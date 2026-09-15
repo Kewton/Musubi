@@ -1,5 +1,5 @@
 {
-  "$comment": "CommandAgent 接点のピン（Issue #24 / H-12）。企画書21章の境界規律により、Musubi は CommandAgent のコードを取り込まず、ビルド時にネットワーク越しで解決もしない。ここに書いた固定値だけを正とする。更新は人手での再取得と、この file の書き換えだけで行う。",
+  "$comment": "CommandAgent 接点のピン（Issue #24 / H-12）。企画書21章の境界規律により、MUSUNEST は CommandAgent のコードを取り込まず、ビルド時にネットワーク越しで解決もしない。ここに書いた固定値だけを正とする。更新は人手での再取得と、この file の書き換えだけで行う。",
   "source": {
     "repo": "github.com/Kewton/CommandAgent",
     "visibility": "public",
@@ -13,13 +13,13 @@
     "version": "community.app-spec/v0.1",
     "sha256": "80e4cb41eeb0f60eb04640e2ac8beac7d1414e7f5a9aa9fa563fd08d17ac7e0b",
     "source_path": "workspace/management/bench/community/appspec-schema/app-spec.schema.yaml",
-    "$comment": "AppSpec スキーマは platform-owned（Musubi が正本）で、CommandAgent 側はその固定 fixture を持つ。version は同 file の schema_version、sha256 は同 file の exact bytes に対する SHA-256（CommandAgent docs/community-mini-app-profile-contract.md §9『The schema pin is SHA-256 over the exact schema bytes』）。CommandAgent 側の app-spec.schema.sha256 と manifest.sha256sums が宣言する値と一致することを、raw bytes からの再計算で確認した（手書きではない）。",
-    "$musubi_side": "packages/appspec-schema/src/index.ts の APPSPEC_SCHEMA_VERSION は M0 プレースホルダの 0.0.0-m0 で、この version 表記と揃っていない。突き合わせは M1 の作業であり、同 file の変更は Issue #24 のスコープ外。"
+    "$comment": "AppSpec スキーマは platform-owned（MUSUNEST が正本）で、CommandAgent 側はその固定 fixture を持つ。version は同 file の schema_version、sha256 は同 file の exact bytes に対する SHA-256（CommandAgent docs/community-mini-app-profile-contract.md §9『The schema pin is SHA-256 over the exact schema bytes』）。CommandAgent 側の app-spec.schema.sha256 と manifest.sha256sums が宣言する値と一致することを、raw bytes からの再計算で確認した（手書きではない）。",
+    "$musunest_side": "packages/appspec-schema/src/index.ts の APPSPEC_SCHEMA_VERSION は M0 プレースホルダの 0.0.0-m0 で、この version 表記と揃っていない。突き合わせは M1 の作業であり、同 file の変更は Issue #24 のスコープ外。"
   },
   "template_tarball": {
     "url": null,
     "sha256": null,
-    "$blocked": "実値を書けない。テンプレート（TanStack Start）は platform-owned deliverable であり CommandAgent 側に存在しない（同 §4『The real TanStack Start template is a platform-owned deliverable and is not copied into CM-1a』。CM-1a は synthetic-community/ の合成 fixture で代替している）。Musubi 側の templates/tanstack-start も M0 では中身が無い（同 README『M1 で中身を入れる』）。tarball artifact が両側に存在しないので、SHA-256 の対象そのものが無い。",
+    "$blocked": "実値を書けない。テンプレート（TanStack Start）は platform-owned deliverable であり CommandAgent 側に存在しない（同 §4『The real TanStack Start template is a platform-owned deliverable and is not copied into CM-1a』。CM-1a は synthetic-community/ の合成 fixture で代替している）。MUSUNEST 側の templates/tanstack-start も M0 では中身が無い（同 README『M1 で中身を入れる』）。tarball artifact が両側に存在しないので、SHA-256 の対象そのものが無い。",
     "$blocked_on": "(1) templates/tanstack-start の中身（M1）。(2) 配布形態の決定 — GitHub Releases のアセットか R2 か（00c『M1着手時に決めること』3）。(3) 再現可能な tarball 生成コマンド。digest を手で書かない規律により、(1)〜(3) が揃うまで null のままにする。推測値を置かない。"
   },
   "headless_contract": {
@@ -29,5 +29,5 @@
     "$compatibility": "既存スカラーキーは常に存在し、欠測は JSON null で埋まる。provider_usage_by_role（provider turn が無ければ空）と pack（pack 未選択なら省略）は additive な追加であり、v1 のまま行われている。exit code は 0 / 1 / 2 / 130 の 4 値で、0 は『プロセスが完了した』のみを意味する — 受入は verdict と assurance の両方で判定する。"
   },
   "pinned_at": "2026-09-13",
-  "pinned_by": "Kewton/Musubi#24"
+  "pinned_by": "Kewton/Musunest#24"
 }

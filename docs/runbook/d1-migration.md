@@ -1,10 +1,14 @@
 # D1 マイグレーション（`CONTROL_DB`）
 
-Control Plane の D1（`musubi-<env>-control`）のスキーマを変える手順と、**変えてよい形の規律**。
+Control Plane の D1（`musunest-<env>-control`）のスキーマを変える手順と、**変えてよい形の規律**。
 手順書は `workspace/mvp/m0/03-workers-and-bindings.md` §7 と `04-cicd.md` §4〜§6。
 
 > **対象は D1 だけ。** アプリのデータは Durable Object（SQLite）にあり、その migration は
 > `wrangler.jsonc` の `migrations`（`03` §4）で扱う。ここには書かない。
+
+> **例外（1回限り・2026-09-15・#75）**：プロダクト名の変更で、当て済みの `0001_musubi_meta.sql` を `0001_musunest_meta.sql`（表 `_musunest_meta`）へ
+> 書き換えた。当て済みの migration を直してよいのは、**D1 を3環境とも作り直して、どの DB にも古い版が当たっていない**からである
+> （production に実データが無いうちに行った）。この例外を前例にしない。以後は §4 のとおり、当て済みの migration は直さない。
 
 **いちばん大事なこと**：D1 に down migration は無い。当てた migration を外す操作は存在しない。
 だから「戻す」はコードの側で行い、スキーマは**1つ前のコードが動く形でしか変えない**（§4）。
@@ -57,7 +61,7 @@ control-plane に wrangler の設定ファイルを足さないこと。`infra:s
 
 > ⚠️ **手元の `pnpm test` / `pnpm check` は、SQL だけを変えたときに前回の合格を再生することがある。**
 > turbo は data-api の test のキャッシュの鍵に control-plane のファイルを含めない（2026-09-14 実測：壊した SQL で `cache hit`）。
-> SQL を足した・直したら **`pnpm --filter @musubi/data-api test`** で turbo を通さずに走らせる。
+> SQL を足した・直したら **`pnpm --filter @musunest/data-api test`** で turbo を通さずに走らせる。
 > CI（`lint-typecheck-unit`）は turbo のキャッシュを持ち越さないので毎回走る。
 
 ### 1.2 migration を書く
@@ -92,7 +96,7 @@ pnpm exec wrangler d1 migrations list  CONTROL_DB --env dev --config packages/da
 pnpm exec wrangler d1 migrations apply CONTROL_DB --env dev --config packages/data-api/wrangler.jsonc --local
 ```
 
-**2026-09-14 実測（wrangler 4.131.1）**：`0001_musubi_meta.sql` が ✅ で当たり、2回目は `No migrations to apply!`。
+**2026-09-14 実測（wrangler 4.131.1）**：`0001_musunest_meta.sql` が ✅ で当たり、2回目は `No migrations to apply!`。
 
 - 永続化先は `packages/data-api/.wrangler/state/v3/d1/`（ignore 済み）。別の場所に置くときは `--persist-to <dir>`。
   `wrangler dev` と永続化先が食い違うときも `--persist-to` で揃える
@@ -291,10 +295,10 @@ pnpm exec wrangler d1 migrations list CONTROL_DB --env <env> --config packages/d
 ### 5.4 バックアップ（export）
 
 ```bash
-pnpm exec wrangler d1 export musubi-<env>-control --remote --env <env> --config packages/data-api/wrangler.jsonc --output <file>.sql
+pnpm exec wrangler d1 export musunest-<env>-control --remote --env <env> --config packages/data-api/wrangler.jsonc --output <file>.sql
 ```
 
-- `export` の引数は `--help` で DB 名とされているので、binding ではなく `musubi-<env>-control` で指す
+- `export` の引数は `--help` で DB 名とされているので、binding ではなく `musunest-<env>-control` で指す
 - 出力には `d1_migrations` の表も入る。取り込んだ先で適用済みの記録が揃う
 - **中身は利用者のデータである。コミットしない。Actions の Artifact にもしない**（public リポジトリ。CLAUDE.md）
 - M0 では手順だけ。定期実行して R2 へ置くのは M2（`04` §6.2）。まず Time Travel（§5.3）で足りる範囲かを考える

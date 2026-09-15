@@ -3,7 +3,7 @@
 //   pnpm smoke --env <dev|staging|production> [--expect-sha <sha>] [--base-url <url>]
 //
 // 宛先は環境変数 SMOKE_BASE_URL（host の workers.dev のオリジン）。--base-url は手元用で、あれば SMOKE_BASE_URL より優先する。
-// 環境変数 SMOKE_PROBE_TOKEN があれば X-Musubi-Probe ヘッダに載せる。**--env production では必須**（下の「production」）。
+// 環境変数 SMOKE_PROBE_TOKEN があれば X-Musunest-Probe ヘッダに載せる。**--env production では必須**（下の「production」）。
 // 全層 ok なら exit 0、それ以外は exit 1（引数の誤りも 1）。
 //
 // ── 判定（上から順に見て、最初に当たったものを `smoke: NG [<層>] …` の1行で出す）──────────
@@ -11,7 +11,7 @@
 //   [host]     届かない（接続失敗・タイムアウト）
 //   [host]     想定外の HTTP ステータス（healthz は 200 か 503 しか返さない。リダイレクトは辿らない）
 //   [host]     応答が JSON でない。HTML なら SPA シェル＝ /healthz が Worker に届いていない（assets.run_worker_first の設定漏れ）
-//   [host]     詳細が隠された応答（{"ok": …} だけ）。X-Musubi-Probe が受け付けられていない
+//   [host]     詳細が隠された応答（{"ok": …} だけ）。X-Musunest-Probe が受け付けられていない
 //   [host]     host の healthz の形でない（service・キー・値・HTTP ステータスとの整合）
 //   [host]     env が --env と一致しない／version が --expect-sha と一致しない
 //   [<check>]  checks のうち、手前の層は ok なのに ok でない層。gateway → data_api → d1 / r2 / do の順に辿る。
@@ -23,7 +23,7 @@
 //
 // ── production（詳細を隠す env）────────────────────────────────────────────
 //
-// production の host は、X-Musubi-Probe が secret MUSUBI_PROBE_TOKEN と一致したときだけ詳細を返し、それ以外は
+// production の host は、X-Musunest-Probe が secret MUSUNEST_PROBE_TOKEN と一致したときだけ詳細を返し、それ以外は
 // {"ok": true|false} だけを返す（03 §5「セキュリティ上の注意」）。{"ok": true} からは env も version も層ごとの結果も読めない。
 // だから --env production では SMOKE_PROBE_TOKEN を必須にし、無ければ1回も叩かずに exit 1 にする（--expect-sha を確かめられない緑を出さない）。
 // どの env が隠すかは PROBE_REQUIRED_ENVS に書き写す（正本は host / gateway の wrangler.jsonc の vars.HEALTHZ_DETAIL。食い違えば smoke.test.ts が落とす）。
@@ -57,13 +57,13 @@ import { ENVS, type Env } from "./sync-bindings.ts";
 export const HEALTHZ_PATH = "/healthz";
 
 /** 詳細版の healthz を求めるヘッダ。apps/host/src/worker/contract.ts の PROBE_HEADER と同じ。 */
-export const PROBE_HEADER = "X-Musubi-Probe";
+export const PROBE_HEADER = "X-Musunest-Probe";
 
-/** X-Musubi-Probe に載せる値を渡す環境変数。 */
+/** X-Musunest-Probe に載せる値を渡す環境変数。 */
 export const PROBE_TOKEN_ENV = "SMOKE_PROBE_TOKEN";
 
 /**
- * X-Musubi-Probe が無いと詳細を返さない env。host / gateway の wrangler.jsonc で vars.HEALTHZ_DETAIL が public でない env と同じ。
+ * X-Musunest-Probe が無いと詳細を返さない env。host / gateway の wrangler.jsonc で vars.HEALTHZ_DETAIL が public でない env と同じ。
  * ここでは SMOKE_PROBE_TOKEN を必須にする。
  */
 export const PROBE_REQUIRED_ENVS: readonly Env[] = ["production"];
@@ -133,7 +133,7 @@ export interface Expectation {
   readonly env: Env;
   /** --expect-sha。与えなければ version を照合しない */
   readonly sha: string | undefined;
-  /** X-Musubi-Probe を載せたか。詳細が隠された応答の理由を言い分けるのに使う */
+  /** X-Musunest-Probe を載せたか。詳細が隠された応答の理由を言い分けるのに使う */
   readonly probe?: boolean;
 }
 
@@ -202,9 +202,9 @@ export function judge(observation: Observation, expected: Expectation): Verdict 
     return ng(
       "host",
       expected.probe === true
-        ? `詳細が隠された応答（${shown} だけ）: X-Musubi-Probe が受け付けられなかった` +
-            `（${PROBE_TOKEN_ENV} と host の secret MUSUBI_PROBE_TOKEN が一致しているかを確かめる）`
-        : `詳細が隠された応答（${shown} だけ）: この host は X-Musubi-Probe が無いと詳細を返さない` +
+        ? `詳細が隠された応答（${shown} だけ）: X-Musunest-Probe が受け付けられなかった` +
+            `（${PROBE_TOKEN_ENV} と host の secret MUSUNEST_PROBE_TOKEN が一致しているかを確かめる）`
+        : `詳細が隠された応答（${shown} だけ）: この host は X-Musunest-Probe が無いと詳細を返さない` +
             `（${PROBE_TOKEN_ENV} を渡すか、host の vars.HEALTHZ_DETAIL を確かめる）`,
       false,
     );
@@ -304,7 +304,7 @@ function readBody(raw: unknown): HostHealthz | string {
   return raw as unknown as HostHealthz;
 }
 
-/** GET /healthz を1回行う。例外は文言を捨て、種別だけを残す。token があれば X-Musubi-Probe に載せる。 */
+/** GET /healthz を1回行う。例外は文言を捨て、種別だけを残す。token があれば X-Musunest-Probe に載せる。 */
 export async function observe(
   url: URL,
   fetchImpl: typeof fetch,
@@ -446,7 +446,7 @@ export function healthzUrl(raw: string | undefined, source: string): URL {
   return new URL(HEALTHZ_PATH, base);
 }
 
-/** ループバックの宛先か。X-Musubi-Probe を http で載せてよいのはここだけ（手元の wrangler dev と試験）。 */
+/** ループバックの宛先か。X-Musunest-Probe を http で載せてよいのはここだけ（手元の wrangler dev と試験）。 */
 const LOOPBACK_HOSTS: readonly string[] = ["localhost", "127.0.0.1", "[::1]"];
 
 /**

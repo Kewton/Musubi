@@ -11,8 +11,8 @@ name: deploy-production
 # ── 資格情報（CLAUDE.md「資格情報の置き場所」・04 §5）────────────────────────────
 # **production 環境の Secret**（リポジトリ全体には無い。v* タグ・承認必須のこのジョブからしか読めない）
 #     CLOUDFLARE_API_TOKEN_PROD / CLOUDFLARE_ACCOUNT_ID_PROD … ① ② だけ（アカウント②）。wrangler には CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID として渡す
-#     MUSUBI_PROBE_TOKEN                                  … ② の gateway と host（deploy-worker.ts が --secrets-file で Worker の secret として載せる）
-#                                                           と ③（SMOKE_PROBE_TOKEN として。X-Musubi-Probe に載せる）だけ
+#     MUSUNEST_PROBE_TOKEN                                  … ② の gateway と host（deploy-worker.ts が --secrets-file で Worker の secret として載せる）
+#                                                           と ③（SMOKE_PROBE_TOKEN として。X-Musunest-Probe に載せる）だけ
 #     SMOKE_BASE_URL                                      … ③ だけ（production の host の workers.dev のオリジン）
 # **リポジトリの Secret**（staging と同じ値）
 #     R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_S3_ENDPOINT … ⓪ だけ。backend（state の置き場）は production でもアカウント①の R2
@@ -22,7 +22,7 @@ name: deploy-production
 # - 資格情報は、それを使うステップの env にだけ渡す。**ジョブの env に置かない**
 # - vars を使わない
 # - wrangler の出力をそのまま流さない。deploy-worker.ts がファイルに受け、workers.dev のホスト名を伏せた要約だけを出す
-# - MUSUBI_PROBE_TOKEN の値をコマンド行にもファイルにも残さない。deploy-worker.ts が一時ファイルに書いて wrangler に渡し、すぐ消す
+# - MUSUNEST_PROBE_TOKEN の値をコマンド行にもファイルにも残さない。deploy-worker.ts が一時ファイルに書いて wrangler に渡し、すぐ消す
 # - smoke に --base-url を使わない（pnpm がコマンド行を引数ごとログに出す）
 # - environment に url を書かない（デプロイの記録に載り、誰でも読める）
 #
@@ -56,7 +56,7 @@ jobs:
           HAS_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID != '' }}
           HAS_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY != '' }}
           HAS_R2_S3_ENDPOINT: ${{ secrets.R2_S3_ENDPOINT != '' }}
-          HAS_MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN != '' }}
+          HAS_MUSUNEST_PROBE_TOKEN: ${{ secrets.MUSUNEST_PROBE_TOKEN != '' }}
           HAS_SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL != '' }}
         run: |
           case "$REF" in
@@ -67,7 +67,7 @@ jobs:
               ;;
           esac
           missing=0
-          for name in CLOUDFLARE_API_TOKEN_PROD CLOUDFLARE_ACCOUNT_ID_PROD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_S3_ENDPOINT MUSUBI_PROBE_TOKEN SMOKE_BASE_URL; do
+          for name in CLOUDFLARE_API_TOKEN_PROD CLOUDFLARE_ACCOUNT_ID_PROD R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_S3_ENDPOINT MUSUNEST_PROBE_TOKEN SMOKE_BASE_URL; do
             has="HAS_${name}"
             if [ "${!has}" != true ]; then
               echo "::error::${name} が空。Secret が未登録（R2_* はリポジトリの Secret、ほかは production 環境の Secret）"
@@ -119,7 +119,7 @@ jobs:
 
       # ── ② デプロイ：依存の末端から data-api → gateway → host（呼ばれる側を先に置く）──────────────
       # --var GIT_SHA が host の /healthz の version になり、③ の --expect-sha がそれを照合する。
-      # gateway と host は MUSUBI_PROBE_TOKEN を secret として毎回載せる（deploy-worker.ts が --secrets-file で渡す。無ければ配らずに落ちる）
+      # gateway と host は MUSUNEST_PROBE_TOKEN を secret として毎回載せる（deploy-worker.ts が --secrets-file で渡す。無ければ配らずに落ちる）
       - name: ② deploy data-api
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
@@ -130,23 +130,23 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
-          MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          MUSUNEST_PROBE_TOKEN: ${{ secrets.MUSUNEST_PROBE_TOKEN }}
           GIT_SHA: ${{ github.sha }}
         run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --target gateway --sha "$GIT_SHA"
       - name: ② deploy host
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN_PROD }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID_PROD }}
-          MUSUBI_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          MUSUNEST_PROBE_TOKEN: ${{ secrets.MUSUNEST_PROBE_TOKEN }}
           GIT_SHA: ${{ github.sha }}
         run: pnpm exec tsx infra/scripts/deploy-worker.ts --env production --target host --sha "$GIT_SHA"
 
       # ── ③ 貫通スモーク（03 §5）。落ちたらデプロイ失敗として扱う ──────────────────────
-      # 宛先と X-Musubi-Probe の値は production 環境の Secret から環境変数で渡す。smoke は URL も値も一切表示しない。
+      # 宛先と X-Musunest-Probe の値は production 環境の Secret から環境変数で渡す。smoke は URL も値も一切表示しない。
       # 初回デプロイは workers.dev の経路ができるまで 404 が続くので、smoke は上限つきで待つ（smoke.ts の RETRY_POLICY）
       - name: ③ 貫通スモーク（host → gateway → data-api → D1 / R2 / DO）
         env:
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
-          SMOKE_PROBE_TOKEN: ${{ secrets.MUSUBI_PROBE_TOKEN }}
+          SMOKE_PROBE_TOKEN: ${{ secrets.MUSUNEST_PROBE_TOKEN }}
           GIT_SHA: ${{ github.sha }}
         run: pnpm smoke --env production --expect-sha "$GIT_SHA"

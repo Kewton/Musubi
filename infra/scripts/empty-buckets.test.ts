@@ -42,7 +42,7 @@ const ODD_KEY = "bundles/app?v=2#top/100%/index.js";
 const PROBE_KEY = "_probe/healthz";
 const MARKERS = [ACCOUNT_ID, TOKEN, "fixture-user-file-9d3a", "app?v=2", PROBE_KEY];
 
-const DEV_BUCKETS = { BUNDLES: "musubi-dev-bundles", UPLOADS: "musubi-dev-uploads" };
+const DEV_BUCKETS = { BUNDLES: "musunest-dev-bundles", UPLOADS: "musunest-dev-uploads" };
 
 function expectNothingSecret(text: string): void {
   for (const marker of MARKERS) expect(text).not.toContain(marker);
@@ -61,7 +61,7 @@ function emptyErrorOf(fn: () => unknown): string {
 
 /** data-api の wrangler.jsonc の形で、env.dev の r2_buckets だけを持つテキスト */
 const configWith = (buckets: readonly unknown[], env = "dev"): string =>
-  JSON.stringify({ env: { [env]: { name: `musubi-${env}-data-api`, r2_buckets: buckets } } }, null, 2);
+  JSON.stringify({ env: { [env]: { name: `musunest-${env}-data-api`, r2_buckets: buckets } } }, null, 2);
 
 // ── 1. 契約 ────────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ describe("契約：消すバケットと入口", () => {
   });
 
   it("BUCKETS の binding と名前の末尾は、Terraform のモジュールの R2 バケット（${local.p}-<末尾>）と過不足なく一致する", () => {
-    const main = readFileSync(join(ROOT, "infra/terraform/modules/musubi-env/main.tf"), "utf8");
+    const main = readFileSync(join(ROOT, "infra/terraform/modules/musunest-env/main.tf"), "utf8");
     const resources = [...main.matchAll(/resource "cloudflare_r2_bucket" "(\w+)" \{[^}]*?name\s*=\s*"\$\{local\.p\}-([a-z0-9-]+)"/g)].map(
       (m) => [m[1], m[2]],
     );
@@ -113,8 +113,8 @@ describe("契約：消すバケットと入口", () => {
 // ── 2. 消す先を読む ─────────────────────────────────────────────────────────────
 
 describe("readBuckets：消す先を読む", () => {
-  const bundles = { binding: "BUNDLES", bucket_name: "musubi-dev-bundles" };
-  const uploads = { binding: "UPLOADS", bucket_name: "musubi-dev-uploads" };
+  const bundles = { binding: "BUNDLES", bucket_name: "musunest-dev-bundles" };
+  const uploads = { binding: "UPLOADS", bucket_name: "musunest-dev-uploads" };
 
   it("name_prefix が変わっても、<prefix>-dev-<末尾> の形なら読む", () => {
     expect(
@@ -132,12 +132,12 @@ describe("readBuckets：消す先を読む", () => {
   });
 
   it.each([
-    ["staging のバケット名", [{ ...bundles, bucket_name: "musubi-staging-bundles" }, uploads], "の形でない。1つも消さない"],
-    ["production のバケット名", [bundles, { ...uploads, bucket_name: "musubi-production-uploads" }], "の形でない。1つも消さない"],
-    ["binding と名前の末尾の取り違え", [{ ...bundles, bucket_name: "musubi-dev-uploads" }, uploads], "の形でない"],
-    ["知らない binding", [bundles, uploads, { binding: "ARCHIVE", bucket_name: "musubi-dev-archive" }], "知らない binding（ARCHIVE）"],
+    ["staging のバケット名", [{ ...bundles, bucket_name: "musunest-staging-bundles" }, uploads], "の形でない。1つも消さない"],
+    ["production のバケット名", [bundles, { ...uploads, bucket_name: "musunest-production-uploads" }], "の形でない。1つも消さない"],
+    ["binding と名前の末尾の取り違え", [{ ...bundles, bucket_name: "musunest-dev-uploads" }, uploads], "の形でない"],
+    ["知らない binding", [bundles, uploads, { binding: "ARCHIVE", bucket_name: "musunest-dev-archive" }], "知らない binding（ARCHIVE）"],
     ["UPLOADS が無い", [bundles], "UPLOADS が無い"],
-    ["binding が文字列でない", [{ bucket_name: "musubi-dev-bundles" }, uploads], "文字列の binding と bucket_name が無い"],
+    ["binding が文字列でない", [{ bucket_name: "musunest-dev-bundles" }, uploads], "文字列の binding と bucket_name が無い"],
   ])("%s なら1つも消さない", (_, buckets, message) => {
     expect(emptyErrorOf(() => readBuckets(configWith(buckets), "dev"))).toContain(message);
   });
@@ -178,7 +178,7 @@ describe("readCredentials：資格情報", () => {
 
 describe("API の形", () => {
   it("キーの / は段のまま、段ごとに URL エンコードする（wrangler r2 object delete と同じ経路）", () => {
-    expect(objectPath(ACCOUNT_ID, "musubi-dev-bundles", PROBE_KEY)).toBe(`/accounts/${ACCOUNT_ID}/r2/buckets/musubi-dev-bundles/objects/_probe/healthz`);
+    expect(objectPath(ACCOUNT_ID, "musunest-dev-bundles", PROBE_KEY)).toBe(`/accounts/${ACCOUNT_ID}/r2/buckets/musunest-dev-bundles/objects/_probe/healthz`);
     expect(objectPath(ACCOUNT_ID, "b", ODD_KEY)).toBe(`/accounts/${ACCOUNT_ID}/r2/buckets/b/objects/bundles/app%3Fv%3D2%23top/100%25/index.js`);
     expect(objectPath(ACCOUNT_ID, "b", USER_KEY)).toBe(
       `/accounts/${ACCOUNT_ID}/r2/buckets/b/objects/uploads/fixture-user-file-9d3a/${encodeURIComponent("写真 1.png")}`,
@@ -319,7 +319,7 @@ describe("CLI：dev 以外は受け付けない", () => {
     ["--env が無い", [], "--env が無い"],
     ["位置引数（値を出さない）", ["--env", "dev", "fixture-positional-8e2a"], "引数が不正: 位置引数は取らない"],
   ])("%s は、資格情報も API も読まずに exit 1", async (_, argv, message) => {
-    const run = await emptyBuckets(argv, { "musubi-staging-bundles": ["k"], "musubi-production-bundles": ["k"] });
+    const run = await emptyBuckets(argv, { "musunest-staging-bundles": ["k"], "musunest-production-bundles": ["k"] });
     expect(run.code).toBe(EXIT_NG);
     expect(run.calls).toEqual([]);
     expect(run.all).toContain(`empty-buckets: ${message}`);
@@ -357,12 +357,12 @@ describe("CLI：dev 以外は受け付けない", () => {
 describe("CLI：空にする（偽の R2）", () => {
   it("dev の2つのバケットを空になるまで消し、空の一覧を読んで exit 0。キー・トークン・Account ID は出さない", async () => {
     const bundles = [PROBE_KEY, ODD_KEY, ...Array.from({ length: 3 }, (_, i) => `bundles/fixture-${i}.js`)];
-    const run = await emptyBuckets(["--env", "dev"], { [DEV_BUCKETS.BUNDLES]: bundles, [DEV_BUCKETS.UPLOADS]: [USER_KEY], "musubi-staging-bundles": [PROBE_KEY] }, { pageSize: 2 });
+    const run = await emptyBuckets(["--env", "dev"], { [DEV_BUCKETS.BUNDLES]: bundles, [DEV_BUCKETS.UPLOADS]: [USER_KEY], "musunest-staging-bundles": [PROBE_KEY] }, { pageSize: 2 });
     expect(run.code, run.all).toBe(EXIT_OK);
     expect(run.store.get(DEV_BUCKETS.BUNDLES)?.size).toBe(0);
     expect(run.store.get(DEV_BUCKETS.UPLOADS)?.size).toBe(0);
     // dev でないバケットには触れない
-    expect(run.store.get("musubi-staging-bundles")?.size).toBe(1);
+    expect(run.store.get("musunest-staging-bundles")?.size).toBe(1);
     expect(new Set(run.calls.map((c) => c.bucket))).toEqual(new Set(Object.values(DEV_BUCKETS)));
     // 消したキーは一覧に並んだキーそのもの（エンコードの往復で別のキーにならない）
     expect(run.calls.filter((c) => c.method === "DELETE" && c.bucket === DEV_BUCKETS.BUNDLES).map((c) => c.key).toSorted()).toEqual(bundles.toSorted());
@@ -388,7 +388,7 @@ describe("CLI：空にする（偽の R2）", () => {
   it("バケットが無い（destroy の後にもう一度動かした）なら、消すものは無いとして exit 0", async () => {
     const run = await emptyBuckets(["--env", "dev"], { [DEV_BUCKETS.UPLOADS]: [USER_KEY] });
     expect(run.code, run.all).toBe(EXIT_OK);
-    expect(run.out).toContainEqual(expect.stringMatching(/^ {2}BUNDLES（musubi-dev-bundles）: バケットが無い（HTTP 404（code 10006: .*）。消すものは無い$/));
+    expect(run.out).toContainEqual(expect.stringMatching(/^ {2}BUNDLES（musunest-dev-bundles）: バケットが無い（HTTP 404（code 10006: .*）。消すものは無い$/));
     expect(run.store.get(DEV_BUCKETS.UPLOADS)?.size).toBe(0);
   });
 

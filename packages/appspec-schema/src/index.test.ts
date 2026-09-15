@@ -3,7 +3,7 @@ import { APPSPEC_SCHEMA_VERSION, PACKAGE_NAME } from "./index.js";
 
 describe("appspec-schema", () => {
   it("パッケージ名が正本の名前と一致する", () => {
-    expect(PACKAGE_NAME).toBe("@musubi/appspec-schema");
+    expect(PACKAGE_NAME).toBe("@musunest/appspec-schema");
   });
 
   it("スキーマバージョンが宣言されている", () => {

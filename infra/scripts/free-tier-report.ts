@@ -17,15 +17,15 @@
 //   d1AnalyticsAdaptiveGroups       … 日ごとの sum.rowsRead・rowsWritten
 //
 // 判定するのは 06 §5 の昇格トリガーのうち、数字で決まる4つ：
-//   P-1 … CPU 超過。status が exceeded で始まる起動（exceededResources）の回数が Musubi の Worker で 1 回でもあれば触れた。
+//   P-1 … CPU 超過。status が exceeded で始まる起動（exceededResources）の回数が MUSUNEST の Worker で 1 回でもあれば触れた。
 //         exceededResources は CPU 時間のほか起動時間・Free の上限でも付く（一次情報）ので、CPU 超過の上界として数える
 //   P-2 … 日次リクエスト（アカウントの全 Worker の合計）が 50,000 を超えた日が 3 日続けば触れた
 //   P-3 … DO の保存容量（アカウントの合計）が 2.5 GB を超えれば触れた
 //   P-4 … D1 の日次の読み取り行・書き込み行（アカウントの合計）が上限の 50% を超えれば触れた
 // P-5（M4 の着手）と P-6（ログの保持期間で調査が詰まった）は人が決める。出力にはそう書くだけ。
 //
-// 日次リクエスト・DO の容量・D1 の行はアカウント単位の上限なので、Musubi 以外の Worker も合計に含める（アカウント①には以前からの Worker がある）。
-// CPU 時間は1回の起動ごとの上限なので、Musubi の Worker だけを見る。Musubi 以外の Worker の名前は出さない（本数だけ）。
+// 日次リクエスト・DO の容量・D1 の行はアカウント単位の上限なので、MUSUNEST 以外の Worker も合計に含める（アカウント①には以前からの Worker がある）。
+// CPU 時間は1回の起動ごとの上限なので、MUSUNEST の Worker だけを見る。MUSUNEST 以外の Worker の名前は出さない（本数だけ）。
 // Service Binding の先の起動も requests に数える（06 §4.2：Free の 100k/日 がどちらで数えるか一次情報に無いので、保守側に数える）。
 //
 // CPU 時間は、環境ごとに host・gateway・data-api の期間中の max を足した値（チェーン合計の上界）を上限と比べて余裕を出す。
@@ -43,7 +43,7 @@
 //
 // **実環境への操作は GraphQL の読み取りだけ。Worker へのリクエストは送らない。** 書き込みの API を呼ばない。
 // 出すのは日付・回数・ミリ秒・バイト数・判定だけ。Account ID・トークン・DO の namespace の ID・D1 の database の ID・
-// Musubi 以外の Worker の名前を出さない。API のエラーの文言は伏せ、長さを切ってから出す（measure-free-tier.ts の sanitize）。
+// MUSUNEST 以外の Worker の名前を出さない。API のエラーの文言は伏せ、長さを切ってから出す（measure-free-tier.ts の sanitize）。
 // 権限が足りない（401・403・GraphQL の認可エラー）ときは、トークンを作らずに止める。
 // 課金額は API で読めない。所有者がダッシュボードで確かめる（06 §8）。
 //
@@ -67,7 +67,7 @@ export interface AccountSpec {
   readonly label: string;
   readonly tokenVar: string;
   readonly accountIdVar: string;
-  /** このアカウントに置いてある Musubi の環境（06 §4.3 案A） */
+  /** このアカウントに置いてある MUSUNEST の環境（06 §4.3 案A） */
   readonly envs: readonly Env[];
 }
 
@@ -87,11 +87,11 @@ export const ACCOUNT_SPECS: Readonly<Record<AccountKey, AccountSpec>> = {
 };
 
 /** Worker 名。正本は各 wrangler.jsonc の env.<env>.name（食い違えば free-tier-report.test.ts が落とす）。 */
-export const musubiScript = (env: Env, worker: Worker): string => `musubi-${env}-${worker}`;
+export const musunestScript = (env: Env, worker: Worker): string => `musunest-${env}-${worker}`;
 
-const MUSUBI_SCRIPTS: ReadonlySet<string> = new Set(ENVS.flatMap((env) => WORKERS.map((worker) => musubiScript(env, worker))));
+const MUSUNEST_SCRIPTS: ReadonlySet<string> = new Set(ENVS.flatMap((env) => WORKERS.map((worker) => musunestScript(env, worker))));
 
-export const isMusubi = (name: string): boolean => MUSUBI_SCRIPTS.has(name);
+export const isMusunest = (name: string): boolean => MUSUNEST_SCRIPTS.has(name);
 
 // ── 上限と昇格トリガー ──────────────────────────────────────────────────────────
 
@@ -396,7 +396,7 @@ function maxDay<T extends { readonly date: string }>(days: readonly T[], pick: (
 export interface DailyRequests {
   readonly date: string;
   readonly total: number;
-  readonly musubi: number;
+  readonly musunest: number;
   /** 名前が __unknown__ の起動（作ったばかりの Worker は名前が入るまで時間が掛かる。06 §7.1） */
   readonly unknown: number;
   readonly other: number;
@@ -413,7 +413,7 @@ export interface RequestsSummary {
   readonly longestRunOver: number;
   /** 期間の最初の日が閾値を超えていた（期間の前から続いている連続を数え落とし得る） */
   readonly overAtStart: boolean;
-  /** 起動があった Musubi 以外の Worker（__unknown__ を除く）の本数 */
+  /** 起動があった MUSUNEST 以外の Worker（__unknown__ を除く）の本数 */
   readonly otherScripts: number;
   /** 期間中の、名前が __unknown__ の起動の回数 */
   readonly unknown: number;
@@ -425,15 +425,15 @@ export function summarizeRequests(rows: readonly InvocationRow[], period: Period
   const days = datesOf(period).map((date) => {
     const ofDay = rows.filter((row) => row.date === date);
     const total = sumOf(ofDay, (row) => row.requests);
-    const musubi = sumOf(
-      ofDay.filter((row) => isMusubi(row.scriptName)),
+    const musunest = sumOf(
+      ofDay.filter((row) => isMusunest(row.scriptName)),
       (row) => row.requests,
     );
     const unknown = sumOf(
       ofDay.filter((row) => row.scriptName === UNKNOWN_SCRIPT),
       (row) => row.requests,
     );
-    return { date, total, musubi, unknown, other: total - musubi - unknown };
+    return { date, total, musunest, unknown, other: total - musunest - unknown };
   });
   let streak = 0;
   let longestRunOver = 0;
@@ -450,7 +450,7 @@ export function summarizeRequests(rows: readonly InvocationRow[], period: Period
     longestRunOver,
     overAtStart: (days[0]?.total ?? 0) > TRIGGERS.p2DailyRequests,
     otherScripts: new Set(
-      rows.filter((row) => !isMusubi(row.scriptName) && row.scriptName !== UNKNOWN_SCRIPT).map((row) => row.scriptName),
+      rows.filter((row) => !isMusunest(row.scriptName) && row.scriptName !== UNKNOWN_SCRIPT).map((row) => row.scriptName),
     ).size,
     unknown: sumOf(days, (day) => day.unknown),
     sampled: rows.some((row) => row.sampleInterval !== 1),
@@ -463,26 +463,26 @@ export const isExceeded = (status: string): boolean => /^exceeded/i.test(status)
 
 /** P-1：上限超過の起動の回数。 */
 export interface ExceededSummary {
-  readonly musubi: number;
-  /** 名前が __unknown__ の起動。作ったばかりの Musubi の Worker かもしれないので、判定では Musubi に数える */
+  readonly musunest: number;
+  /** 名前が __unknown__ の起動。作ったばかりの MUSUNEST の Worker かもしれないので、判定では MUSUNEST に数える */
   readonly unknown: number;
-  /** Musubi 以外の Worker（参考。判定に入れない） */
+  /** MUSUNEST 以外の Worker（参考。判定に入れない） */
   readonly other: number;
   readonly touched: boolean;
 }
 
 export function summarizeExceeded(rows: readonly InvocationRow[]): ExceededSummary {
   const exceeded = rows.filter((row) => isExceeded(row.status));
-  const musubi = sumOf(
-    exceeded.filter((row) => isMusubi(row.scriptName)),
+  const musunest = sumOf(
+    exceeded.filter((row) => isMusunest(row.scriptName)),
     (row) => row.requests,
   );
   const unknown = sumOf(
     exceeded.filter((row) => row.scriptName === UNKNOWN_SCRIPT),
     (row) => row.requests,
   );
-  const other = sumOf(exceeded, (row) => row.requests) - musubi - unknown;
-  return { musubi, unknown, other, touched: musubi + unknown > 0 };
+  const other = sumOf(exceeded, (row) => row.requests) - musunest - unknown;
+  return { musunest, unknown, other, touched: musunest + unknown > 0 };
 }
 
 export interface WorkerCpu {
@@ -510,7 +510,7 @@ const toMs = (us: number): number => us / 1000;
 
 export function summarizeCpu(rows: readonly InvocationRow[], env: Env): EnvCpu {
   const workers = WORKERS.map((worker): WorkerCpu => {
-    const own = rows.filter((row) => row.scriptName === musubiScript(env, worker));
+    const own = rows.filter((row) => row.scriptName === musunestScript(env, worker));
     const requests = sumOf(own, (row) => row.requests);
     return {
       worker,
@@ -609,7 +609,7 @@ export function judgeTriggers(reports: readonly AccountReport[]): TriggerVerdict
       : { id, state: "clear", reason: "触れていない" };
   };
   return [
-    numeric("P-1", (r) => r.exceeded.touched, "Musubi の Worker に上限超過（exceededResources）の起動がある"),
+    numeric("P-1", (r) => r.exceeded.touched, "MUSUNEST の Worker に上限超過（exceededResources）の起動がある"),
     numeric(
       "P-2",
       (r) => r.requests.touched,
@@ -666,13 +666,13 @@ export function formatAccount(report: AccountReport): string[] {
   const lines = [
     `══ ${ACCOUNT_SPECS[report.key].label}`,
     `── 日次リクエスト（workersInvocationsAdaptive の sum.requests。全 Worker の合計・Service Binding の先も数える。上限 ${fmtCount(FREE_LIMITS.dailyRequests)}/日）`,
-    `  最大 ${fmtCount(requests.max.total)} req/日（${requests.max.date}。Musubi ${fmtCount(requests.max.musubi)}・` +
+    `  最大 ${fmtCount(requests.max.total)} req/日（${requests.max.date}。MUSUNEST ${fmtCount(requests.max.musunest)}・` +
       `名前なし ${fmtCount(requests.max.unknown)}・その他 ${fmtCount(requests.max.other)}）  その他の Worker ${requests.otherScripts} 本（名前は出さない）`,
     `  ${fmtCount(TRIGGERS.p2DailyRequests)}/日 を超えた日 ${requests.daysOver} 日（続いた最長 ${requests.longestRunOver} 日）`,
     ...(requests.overAtStart ? ["  注: 期間の最初の日から超えている。前の日から続いているかもしれないので、前にずらして読み直す"] : []),
     ...(requests.sampled ? [`  注: ${SAMPLED_NOTE}`] : []),
     `  P-2: ${state(requests.touched)}`,
-    `── CPU 時間（Musubi の Worker。上限 ${FREE_LIMITS.cpuMs} ms/起動）`,
+    `── CPU 時間（MUSUNEST の Worker。上限 ${FREE_LIMITS.cpuMs} ms/起動）`,
     ...(requests.unknown > 0 ? [`  注: ${unknownNote(requests.unknown)}`] : []),
   ];
   for (const env of report.cpu) {
@@ -703,7 +703,7 @@ export function formatAccount(report: AccountReport): string[] {
     }
   }
   lines.push(
-    `  上限超過の起動（status が exceeded*）: Musubi ${fmtCount(exceeded.musubi)} 回・名前なし ${fmtCount(exceeded.unknown)} 回` +
+    `  上限超過の起動（status が exceeded*）: MUSUNEST ${fmtCount(exceeded.musunest)} 回・名前なし ${fmtCount(exceeded.unknown)} 回` +
       `・その他の Worker ${fmtCount(exceeded.other)} 回（参考）`,
     `  P-1: ${state(exceeded.touched)}`,
     `── DO の保存容量（durableObjectsSqlStorageGroups ＋ durableObjectsStorageGroups の max.storedBytes。アカウント合計。上限 ${fmtBytes(FREE_LIMITS.doStoredBytes)}）`,

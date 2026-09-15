@@ -1,7 +1,7 @@
 // Cloudflare の adapter。D1 / R2 / Durable Object の API を叩くのはこのファイルだけ。
 //
 // binding の型と、healthz の Probe の実体を置く。判定と応答の形は src/healthz.ts が持つ。
-import type { AppInstanceDO } from "@musubi/app-do";
+import type { AppInstanceDO } from "@musunest/app-do";
 import { ProbeFailure } from "./healthz";
 import type { Probes } from "./healthz";
 

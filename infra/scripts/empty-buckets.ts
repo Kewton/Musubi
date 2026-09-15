@@ -49,7 +49,7 @@ export const EMPTYABLE_ENVS: readonly Env[] = ["dev"];
 /** 消す先のバケット名を読む設定（リポジトリルートからの相対パス）。R2 を binding しているのは data-api だけ。 */
 export const BUCKET_CONFIG = "packages/data-api/wrangler.jsonc";
 
-/** 消すバケットの binding と、Terraform のモジュールが付ける名前の末尾（infra/terraform/modules/musubi-env/main.tf の `${local.p}-<末尾>`）。 */
+/** 消すバケットの binding と、Terraform のモジュールが付ける名前の末尾（infra/terraform/modules/musunest-env/main.tf の `${local.p}-<末尾>`）。 */
 export const BUCKETS = { BUNDLES: "bundles", UPLOADS: "uploads" } as const;
 export type BucketBinding = keyof typeof BUCKETS;
 

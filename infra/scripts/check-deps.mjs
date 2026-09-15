@@ -14,7 +14,7 @@ const isWorkspace = (v) => typeof v === "string" && v.startsWith("workspace:");
 for (const [name, allowed] of Object.entries(ALLOWED)) {
   const pkg = JSON.parse(readFileSync(`${DIRS[name]}/package.json`, "utf8"));
   const actual = Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })
-    .filter(([k, v]) => k.startsWith("@musubi/") && isWorkspace(v))
+    .filter(([k, v]) => k.startsWith("@musunest/") && isWorkspace(v))
     .map(([k]) => k);
 
   for (const dep of actual) {

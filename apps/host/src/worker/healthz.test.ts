@@ -56,7 +56,7 @@ describe("runHealthz", () => {
 
   it("届かなければ gateway が ng で、その先は確かめなかったと示す。例外の文言は応答に載せずログにだけ出す", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const leaked = new TypeError("service musubi-staging-gateway: internal detail");
+    const leaked = new TypeError("service musunest-staging-gateway: internal detail");
     const result = await runHealthz(fails(leaked), META);
 
     expect(result.status).toBe(503);
@@ -175,14 +175,14 @@ describe("disclose（詳細を誰に返すか・03 §5「セキュリティ上�
     }, { calls });
   }
 
-  it("public なら X-Musubi-Probe を見ずに詳細を返す（dev / staging の今の挙動）", async () => {
+  it("public なら X-Musunest-Probe を見ずに詳細を返す（dev / staging の今の挙動）", async () => {
     const verify = verifier();
     expect(await disclose(OK, "public", null, verify)).toBe(OK.body);
     expect(await disclose(NG, "public", "wrong", verify)).toBe(NG.body);
     expect(verify.calls).toEqual([]);
   });
 
-  it("probe で X-Musubi-Probe が secret と一致すれば詳細を返す", async () => {
+  it("probe で X-Musunest-Probe が secret と一致すれば詳細を返す", async () => {
     const verify = verifier();
     expect(await disclose(NG, "probe", TOKEN, verify)).toBe(NG.body);
     expect(verify.calls).toEqual([TOKEN]);

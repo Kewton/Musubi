@@ -3,12 +3,12 @@
 // パッケージとしての公開面（package.json の exports）はこのファイルだけである（data-api と同じ形）。
 // gateway を呼ぶ側が型と定数を参照しても、Worker 本体を巻き込まないようにするため。
 // Worker の入口は wrangler.jsonc の main（src/index.ts）で、こちらとは別にしてある。
-import { HEALTHZ_CHECKS } from "@musubi/data-api";
-import type { CheckResult } from "@musubi/data-api";
+import { HEALTHZ_CHECKS } from "@musunest/data-api";
+import type { CheckResult } from "@musunest/data-api";
 
 export type { CheckResult };
 
-export const PACKAGE_NAME = "@musubi/gateway" as const;
+export const PACKAGE_NAME = "@musunest/gateway" as const;
 
 /** 貫通スモーク（03 §5）が叩くパス。M0 の gateway が応答するのはこれだけ。 */
 export const HEALTHZ_PATH = "/healthz" as const;
@@ -27,18 +27,18 @@ export const GATEWAY_HEALTHZ_CHECKS = ["data_api", ...HEALTHZ_CHECKS] as const;
 export type GatewayHealthzCheck = (typeof GATEWAY_HEALTHZ_CHECKS)[number];
 
 /**
- * 詳細版の healthz を求めるヘッダ（03 §5「セキュリティ上の注意」）。値が secret MUSUBI_PROBE_TOKEN と一致したときだけ、
- * HEALTHZ_DETAIL が "probe" の env でも詳細を返す。host は gateway を呼ぶとき、自分の MUSUBI_PROBE_TOKEN をこれに載せる。
+ * 詳細版の healthz を求めるヘッダ（03 §5「セキュリティ上の注意」）。値が secret MUSUNEST_PROBE_TOKEN と一致したときだけ、
+ * HEALTHZ_DETAIL が "probe" の env でも詳細を返す。host は gateway を呼ぶとき、自分の MUSUNEST_PROBE_TOKEN をこれに載せる。
  */
-export const PROBE_HEADER = "X-Musubi-Probe" as const;
+export const PROBE_HEADER = "X-Musunest-Probe" as const;
 
-/** X-Musubi-Probe と照合する wrangler secret の名前。**wrangler.jsonc に書かない**（リポジトリにも CI ログにも出さない）。 */
-export const PROBE_TOKEN_SECRET = "MUSUBI_PROBE_TOKEN" as const;
+/** X-Musunest-Probe と照合する wrangler secret の名前。**wrangler.jsonc に書かない**（リポジトリにも CI ログにも出さない）。 */
+export const PROBE_TOKEN_SECRET = "MUSUNEST_PROBE_TOKEN" as const;
 
 /**
  * wrangler.jsonc の vars.HEALTHZ_DETAIL が取る値。
  *   public … 誰にでも詳細を返す（dev / staging）
- *   probe  … X-Musubi-Probe が secret と一致したときだけ詳細を返す（production）。secret が無ければ常に隠す
+ *   probe  … X-Musunest-Probe が secret と一致したときだけ詳細を返す（production）。secret が無ければ常に隠す
  * これ以外の値（未設定・書き違い）は probe として扱う（閉じる側に倒す）。
  */
 export const HEALTHZ_DETAILS = ["public", "probe"] as const;
