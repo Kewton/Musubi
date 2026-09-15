@@ -63,6 +63,8 @@ appspec-schema ← sdk ← data-api ← gateway ← host
 ## 手順
 
 - 作業は必ず Issue から。ブランチは `feat/<issue番号>-<slug>`
+- **監督側（人・オーケストレーター）の運用文書・CI・設定の変更も Issue を立ててから出す。** PR は `Closes #N` で Issue を閉じる。
+  Issue を閉じない途中の PR は `Refs #N` でよいが、**その Issue を閉じる PR が必ず `Closes` を持つ**（2026-09-15・M0 清算 `workspace/mvp/m0/05-acceptance.md` §6）
 - コミットは **Conventional Commits**（`feat:` `fix:` `chore:` `docs:` `ci:` `refactor:` `test:`）
 - PR は **squash merge のみ**。squash のコミットメッセージ = PRタイトル
 - `main` は保護。直接 push しない。緊急時の管理者バイパスは可能だが、**使ったら Issue に理由を残す**
