@@ -3,7 +3,7 @@
 #
 #   wfp_namespace_name / turnstile_sitekey は「まだ資源が無い」ことを null で表す。
 #   WfP は wfp_enabled = false 固定で count = 0 なので one() が null を返す。
-#   Turnstile は custom_domain_enabled 待ち。
+#   Turnstile は M2（ログイン）で入れる。
 #   資源が入る時も schema は変えず、この2つの値だけが null から埋まる。
 output "bindings" {
   description = "wrangler.jsonc へ同期する値。terraform output -json bindings で取り出す。"

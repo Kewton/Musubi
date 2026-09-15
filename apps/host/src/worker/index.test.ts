@@ -125,6 +125,10 @@ describe.each(ENVS)("wrangler.jsonc（env.%s）", (env) => {
   it("Worker が先に受けるのは /api/* と /healthz だけ", () => {
     expect(config.assets?.run_worker_first).toEqual([...WORKER_ROUTES]);
   });
+
+  it(`独自ドメインは ${env === "production" ? "app.musunest.com の custom domain だけ" : "持たない"}（ゾーンはアカウント②。Issue #33）`, () => {
+    expect(config.routes ?? []).toEqual(env === "production" ? [{ pattern: "app.musunest.com", custom_domain: true }] : []);
+  });
 });
 
 describe("CLOUDFLARE_ENV（ビルド時の env）", () => {
