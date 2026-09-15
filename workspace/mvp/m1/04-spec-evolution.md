@@ -56,11 +56,12 @@
 | 4 | **静的チェックに足す。** 見本が通り、わざと間違えた負例が落ちることを確かめる。誤りコードを決める | `packages/spec-engine`、負例は `samples/` の中 |
 | 5 | 実行時の意味を短く書く（端数・空のとき・消すとき など） | `packages/appspec-schema` の実行時の意味の文書 |
 | 6 | 動かす（計算・data-api・画面） | `packages/spec-engine`・`packages/data-api`・`apps/host` |
-| 7 | 採点のシナリオが通ることを確かめ、スマホで見る | `e2e`、staging |
+| 7 | 採点のシナリオが通ることを確かめ、スマホで見る | 採点は時計を差し込んだテスト（vitest）。staging では `e2e`（時計に依存しない値）とスマホ |
 
 - **1〜5 は、動かす前にやる。** 語彙の追加を、テスト先行で進める
 - 1 つの Issue で扱う語彙は、なるべく 1〜2 個にする。一周が短いほど、デモまでが近い
-- 手順 4 と 7 は、今の unit ゲート（vitest）の中で回す。検証ゲートは増やさない（`.commandmate/verify.yaml` は人しか直せない）
+- 手順 4 と、手順 7 の採点は、今の unit ゲート（vitest）の中で回す。検証ゲートは増やさない（`.commandmate/verify.yaml` は人しか直せない）
+- staging の `e2e` は、`deploy-staging` の貫通スモークのあとに CI で回す。時刻で変わる値は、テストで時計を差し込んで採点し、staging では機械で確かめない（`00-open-questions.md` の Q16・Q17）
 
 ---
 
