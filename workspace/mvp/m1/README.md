@@ -11,6 +11,7 @@
 > | [`01-integration-strategy.md`](./01-integration-strategy.md) | 進め方（見本 → 契約 → 工場 → 結合 → 自動化）と、**M1a・M1b のゲートの正本**（§5.3） |
 > | [`02-l2-spec-examples.md`](./02-l2-spec-examples.md) | 見本 3 つの宣言の具体例と、採点のシナリオ（期待値） |
 > | [`03-spec-layers-and-checker.md`](./03-spec-layers-and-checker.md) | 宣言の層構造と、静的チェックツールの方向性 |
+> | [`04-spec-evolution.md`](./04-spec-evolution.md) | L2 の宣言の育て方（語彙の足し方・版の運用・磨く材料・語彙の台帳） |
 
 ---
 
@@ -170,6 +171,7 @@ v0.1（`community.app-spec/v0.1`）は、工場（CommandAgent）が測定のた
 - スキーマの正本はプラットフォーム（MUSUNEST）が持つ。CommandAgent の契約文書にも、本物が届いたら封緘された手順で差し替えると書かれている
 - だから M1a で **v0.1 の次の版（新しい版）をこのリポジトリで作り**、M1b で工場側を差し替える（Q9）
 - 契約に足す書き方の一覧は `02` §6 にある
+- **語彙は、見本が必要とする分だけ、マイルストーンごとに足す。** 足し方と版の運用は [`04-spec-evolution.md`](./04-spec-evolution.md) にある
 
 ### 2.3 宣言の層と静的チェック
 
