@@ -110,7 +110,7 @@ gh workflow run rollback.yml --ref <最新の v タグ> -f to=<最新の v タ�
 | 状況 | 何が起きるか | どうするか |
 |---|---|---|
 | 戻し先の commit の版が**直近 10 版に無い**（GIT_SHA の無い版しか無い場合も） | ① が何も切り替えずに落ちる（「版が見つからない」） | §1.4 |
-| `rollback.yml` を含まないタグしか無い（**v0.1.0** がそう） | そのタグを `--ref` にできない（ワークフローの定義が無い） | 新しいタグを `--ref` にする。戻し先（`to`）は古いタグでよい |
+| `rollback.yml` を含まないタグしか無い（**v0.1.0** がそう。改名の境界より前なので、今は戻し先にもならない） | そのタグを `--ref` にできない（ワークフローの定義が無い） | 新しいタグを `--ref` にする。戻し先（`to`）は古いタグでよい |
 | 戻し先の版から今までに **Durable Object のクラスを足した・消した** | Cloudflare が rollback を拒否する（Cloudflare の Rollbacks の文書） | 戻せない前提でリリースする。前へ直す（新しいタグ）。二次手段も古い設定にクラスを消す migration が無く通らない見込み（未確認） |
 | 版が束縛している **R2 バケット・KV・Queue が消えている** | 同上（拒否） | 前へ直す。Terraform の資源を消すのは、それを使う版が直近に無くなってから |
 | 戻し先の版から今までに **合言葉（`MUSUNEST_PROBE_TOKEN`）を変えた** | wrangler は「secret が変わった」確認を非対話で yes にして進む（wrangler 4.131.1 のソース。ログに変わった secret の**名前**が出る）。戻した版がどちらの値で動くかは Cloudflare の文書に書かれておらず**未確認**。古い値で動くと ② が「詳細が隠された応答」で落ちる | ② が落ちたら §1.4（今の合言葉を載せて配り直す） |
@@ -124,7 +124,7 @@ gh workflow run deploy-production.yml --ref <戻し先の v タグ>
 # 🧑 承認 → ⓪ 乖離チェック → build → ① migration → ② deploy → ③ smoke（--expect-sha は戻し先の commit）
 ```
 
-- **戻し先のタグにある `deploy-production.yml` の定義で動く。** `deploy-production.yml` を含むタグ（v0.1.0 以降）だけが使える
+- **戻し先のタグにある `deploy-production.yml` の定義で動く。** `deploy-production.yml` を含むタグだけが使える。改名の境界（§0）より前のタグは使えないので、**実際には v0.2.0 以降**
 - ⓪：戻し先のタグの `wrangler.jsonc` を今の state と照合する。その後に Terraform の資源を変えていれば**ここで止まる**（正しい）。そのときは前へ直す
 - ①：戻し先のタグの migration はすべて当たっているので、何も当たらない（`No migrations to apply!`）。**D1 は戻らない**（§2）
 - ②：戻し先のコードを**ビルドし直して新しい版を作る**。合言葉は今の `MUSUNEST_PROBE_TOKEN` が載る
